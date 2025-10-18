@@ -6,6 +6,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
+	"paige/pkg/entities"
 	"paige/pkg/inference"
 	"paige/pkg/utils"
 )
@@ -13,6 +14,7 @@ import (
 type Server struct {
 	Echo       *echo.Echo
 	Inferencer inference.Inferencer
+	Characters []entities.Character
 	Ctx        context.Context
 }
 

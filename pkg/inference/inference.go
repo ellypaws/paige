@@ -66,7 +66,7 @@ func (o *OpenAIInferencer) Infer(ctx context.Context, system, user string) (stri
 				},
 			},
 		},
-		MaxCompletionTokens: openai.Int(1024),
+		MaxCompletionTokens: openai.Int(4096 * 4),
 		Temperature:         openai.Float(0.3),
 		TopP:                openai.Float(1.0),
 	}

@@ -1,17 +1,16 @@
 package server
 
 import (
-	"context"
+	"cmp"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
-	"unicode"
-	"unicode/utf8"
+	"sync"
 
 	"github.com/labstack/echo/v4"
 
@@ -29,19 +28,6 @@ type summarizeReq struct {
 type charactersResp struct {
 	Characters []entities.Character `json:"characters"`
 }
-
-// --- optional narrow interfaces the Inferencer may provide ---
-
-type characterDetector interface {
-	// DetectCharacters returns a list of characters it sees in `text`.
-	DetectCharacters(ctx context.Context, text string) ([]entities.Character, error)
-}
-type characterSummarizer interface {
-	// SummarizeCharacters returns richer character details based on text + seeds.
-	SummarizeCharacters(ctx context.Context, text string, seed []entities.Character) ([]entities.Character, error)
-}
-
-// --- handlers ---
 
 type NameInferResponse struct {
 	Characters []Character `json:"characters"`
@@ -63,14 +49,13 @@ func (s *Server) handlePostNames(c echo.Context) error {
 		return c.JSON(http.StatusOK, NameInferResponse{Characters: nil})
 	}
 
-	chunks := chunkText(req.Text, 2048)
+	chunks := utils.ChunkText(req.Text, 2048)
 	ctx := c.Request().Context()
 
 	var accum []Character
 	for _, ch := range chunks {
 		infer, err := s.Inferencer.Infer(ctx, nameExtractPrompt, ch)
 		if err != nil {
-			// model failed for this chunk → heuristic fallback using the chunk itself
 			accum = mergeNameCharacters(accum, heuristicCharsFromText(ch))
 			continue
 		}
@@ -177,170 +162,129 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 		return c.JSON(http.StatusOK, charactersResp{Characters: seed})
 	}
 
-	chunks := chunkText(req.Text, 2048)
+	chunks := utils.ChunkText(req.Text, 2048*2)
 	ctx := c.Request().Context()
+	accum := s.Characters
 
-	var accum []entities.Character
-	for _, ch := range chunks {
-		out, err := s.Inferencer.Infer(ctx, summarizePrompt, ch)
-		if err != nil {
-			continue
+	w := utils.NewSSEWriter(c)
+	defer w.Close()
+
+	finished := make(chan []entities.Character)
+	done := make(chan struct{}, len(chunks))
+
+	go func() {
+		defer close(done)
+		for chars := range finished {
+			if err := w.Event("data", charactersResp{Characters: chars}); err != nil {
+				c.Logger().Errorf("SSE write error: %v", err)
+				return
+			}
 		}
-		var parsed summarizeModelResp
-		if err := json.Unmarshal([]byte(out), &parsed); err != nil || len(parsed.Characters) == 0 {
-			continue
+	}()
+
+	systemPrompt := summarizePrompt
+	for i, char := range s.Characters {
+		if strings.EqualFold(char.Role, "main") {
+			bin, _ := json.MarshalIndent(char, "", " ")
+			if len(bin) > 0 {
+				systemPrompt = summarizePrompt + "\nExample:\n```\n" + string(bin) + "\n```\n"
+				break
+			}
 		}
-		accum = mergeCharacters(accum, dedupeByName(parsed.Characters))
+		if i == len(s.Characters)-1 {
+			c.Logger().Warnf("no example character available for summarization prompt")
+		}
+	}
+
+	var wg sync.WaitGroup
+	for i, ch := range chunks {
+		if cancelled(c) {
+			break
+		}
+
+		if i > 0 {
+			bin, err := json.MarshalIndent(accum, "", " ")
+			if err != nil {
+				return c.JSON(http.StatusInternalServerError, utils.ErrJSON("failed preparing summarization context"))
+			}
+			ch += "\n" + string(bin)
+		}
+
+		wg.Go(func(idx int, chunk string) func() {
+			return func() {
+				if cancelled(c) {
+					return
+				}
+				c.Logger().Debugf("summarizing chunk %d/%d (%d chars)", idx+1, len(chunks), len(systemPrompt)+len(chunk))
+				out, err := s.Inferencer.Infer(ctx, systemPrompt, chunk)
+				if err != nil {
+					c.Logger().Errorf("summarization inference error on chunk %d: %v", idx+1, err)
+					_ = w.Event("error", map[string]string{"chunk": strconv.Itoa(idx + 1), "error": err.Error()})
+					return
+				}
+
+				if cancelled(c) {
+					return
+				}
+
+				if strings.HasPrefix(out, "<think>") {
+					if idx := strings.Index(out, "</think>"); idx != -1 {
+						out = out[idx+len("</think>"):]
+					}
+				}
+				if len(out) == 0 {
+					c.Logger().Errorf("summarization empty result on chunk %d", idx+1)
+					return
+				}
+				if out[0] != '{' {
+					if j := strings.Index(out, "{"); j != -1 {
+						out = out[j:]
+					} else {
+						c.Logger().Errorf("summarization no JSON result on chunk %d", idx+1)
+						c.Logger().Debugf("model output:\n```\n%s\n```", out)
+						return
+					}
+				}
+
+				var parsed summarizeModelResp
+				if err := json.Unmarshal([]byte(out), &parsed); err != nil || len(parsed.Characters) == 0 {
+					c.Logger().Errorf("summarization parse error or empty result on chunk %d: %v", idx+1, err)
+					c.Logger().Debugf("model output:\n```\n%s\n```", out)
+					return
+				}
+
+				accum = mergeCharacters(accum, dedupeByName(parsed.Characters))
+				finished <- accum
+			}
+		}(i, ch))
+	}
+
+	wg.Wait()
+	close(finished)
+	<-done
+
+	if cancelled(c) {
+		return nil
 	}
 
 	if len(accum) == 0 && len(seed) == 0 {
 		return c.JSON(http.StatusInternalServerError, utils.ErrJSON("failed parsing summarization result"))
 	}
 
-	return c.JSON(http.StatusOK, charactersResp{Characters: mergeCharacters(seed, accum)})
+	s.Characters = accum
+	_ = w.Event("done", charactersResp{Characters: mergeCharacters(seed, accum)})
+
+	return nil
 }
 
-var paragraphRX = regexp.MustCompile(`\n{2,}`)
-
-func chunkText(text string, limit int) []string {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return nil
+func cancelled(c echo.Context) bool {
+	select {
+	case <-c.Request().Context().Done():
+		return true
+	default:
+		return false
 	}
-	if runeLen(text) <= limit {
-		return []string{text}
-	}
-
-	// Decide primary block unit: paragraphs, else single lines, else whole text.
-	var blocks []string
-	var joiner string
-	if paragraphRX.FindStringIndex(text) != nil {
-		blocks = paragraphRX.Split(text, -1)
-		joiner = "\n\n"
-	} else if strings.Contains(text, "\n") {
-		blocks = strings.Split(text, "\n")
-		joiner = "\n"
-	} else {
-		blocks = []string{text}
-		joiner = " "
-	}
-
-	out := make([]string, 0, len(blocks))
-	cur := ""
-
-	var appendPiece func(piece string)
-	appendPiece = func(piece string) {
-		piece = strings.TrimSpace(piece)
-		if piece == "" {
-			return
-		}
-		if cur == "" {
-			if runeLen(piece) <= limit {
-				cur = piece
-				return
-			}
-			// piece itself too large: split by spaces safely
-			for _, p := range splitBySpaceRune(piece, limit) {
-				if cur == "" {
-					cur = p
-				} else if runeLen(cur)+runeLen(joiner)+runeLen(p) <= limit {
-					cur = cur + joiner + p
-				} else {
-					out = append(out, cur)
-					cur = p
-				}
-			}
-			return
-		}
-		// Try to add with joiner
-		if runeLen(cur)+runeLen(joiner)+runeLen(piece) <= limit {
-			cur = cur + joiner + piece
-			return
-		}
-		// Flush and handle piece
-		out = append(out, cur)
-		cur = ""
-		appendPiece(piece)
-	}
-
-	for _, b := range blocks {
-		b = strings.TrimSpace(b)
-		if b == "" {
-			continue
-		}
-		// If block fits, try to pack as-is; otherwise split by spaces.
-		if runeLen(b) <= limit {
-			appendPiece(b)
-		} else {
-			for _, p := range splitBySpaceRune(b, limit) {
-				appendPiece(p)
-			}
-		}
-	}
-
-	if strings.TrimSpace(cur) != "" {
-		out = append(out, cur)
-	}
-	return out
 }
-
-func splitBySpaceRune(s string, limit int) []string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
-	}
-	if runeLen(s) <= limit {
-		return []string{s}
-	}
-	var parts []string
-	for s != "" {
-		if runeLen(s) <= limit {
-			parts = append(parts, s)
-			break
-		}
-		idx := lastWhitespaceByteIndexBeforeRuneLimit(s, limit)
-		if idx <= 0 {
-			// No whitespace before limit; hard-cut at rune boundary
-			cut := byteIndexAtRunePos(s, limit)
-			parts = append(parts, strings.TrimSpace(s[:cut]))
-			s = strings.TrimSpace(s[cut:])
-			continue
-		}
-		parts = append(parts, strings.TrimSpace(s[:idx]))
-		s = strings.TrimLeftFunc(s[idx:], unicode.IsSpace)
-	}
-	return parts
-}
-
-func lastWhitespaceByteIndexBeforeRuneLimit(s string, limit int) int {
-	rc := 0
-	last := -1
-	for i, r := range s {
-		if rc >= limit {
-			break
-		}
-		if unicode.IsSpace(r) {
-			last = i
-		}
-		rc++
-	}
-	return last
-}
-
-func byteIndexAtRunePos(s string, pos int) int {
-	if pos <= 0 {
-		return 0
-	}
-	i := 0
-	for pos > 0 && i < len(s) {
-		_, sz := utf8.DecodeRuneInString(s[i:])
-		i += sz
-		pos--
-	}
-	return i
-}
-
-func runeLen(s string) int { return utf8.RuneCountInString(s) }
 
 // GET /userscript (optional dev helper)
 func (s *Server) handleGetUserscript(c echo.Context) error {
@@ -450,88 +394,53 @@ func mergeCharacters(base, updates []entities.Character) []entities.Character {
 }
 
 func mergeOne(a, b entities.Character) entities.Character {
-	// scalar preference: keep a if non-empty, else take b
-	if a.Age == "" && b.Age != "" {
-		a.Age = b.Age
-	}
-	if a.Gender == "" && b.Gender != "" {
-		a.Gender = b.Gender
-	}
-	if a.Role == "" && b.Role != "" {
-		a.Role = b.Role
-	}
-	if a.Personality == "" && b.Personality != "" {
-		a.Personality = b.Personality
-	}
+	a.Age = cmp.Or(a.Age, b.Age)
+	a.Gender = cmp.Or(a.Gender, b.Gender)
+	a.Role = cmp.Or(a.Role, b.Role)
+	a.Personality = cmp.Or(a.Personality, b.Personality)
 
-	// nested: copy missing fields only
-	if a.PhysicalDescription.Height == "" && b.PhysicalDescription.Height != "" {
-		a.PhysicalDescription.Height = b.PhysicalDescription.Height
-	}
-	if a.PhysicalDescription.Build == "" && b.PhysicalDescription.Build != "" {
-		a.PhysicalDescription.Build = b.PhysicalDescription.Build
-	}
-	if a.PhysicalDescription.Hair == "" && b.PhysicalDescription.Hair != "" {
-		a.PhysicalDescription.Hair = b.PhysicalDescription.Hair
-	}
-	if a.PhysicalDescription.Other == "" && b.PhysicalDescription.Other != "" {
-		a.PhysicalDescription.Other = b.PhysicalDescription.Other
-	}
+	a.PhysicalDescription.Height = cmp.Or(a.PhysicalDescription.Height, b.PhysicalDescription.Height)
+	a.PhysicalDescription.Build = cmp.Or(a.PhysicalDescription.Build, b.PhysicalDescription.Build)
+	a.PhysicalDescription.Hair = cmp.Or(a.PhysicalDescription.Hair, b.PhysicalDescription.Hair)
+	a.PhysicalDescription.Other = cmp.Or(a.PhysicalDescription.Other, b.PhysicalDescription.Other)
 
-	if a.SexualCharacteristics.Genitalia == "" && b.SexualCharacteristics.Genitalia != "" {
-		a.SexualCharacteristics.Genitalia = b.SexualCharacteristics.Genitalia
-	}
-	if a.SexualCharacteristics.PenisLengthFlaccid == nil && b.SexualCharacteristics.PenisLengthFlaccid != nil {
-		a.SexualCharacteristics.PenisLengthFlaccid = b.SexualCharacteristics.PenisLengthFlaccid
-	}
-	if a.SexualCharacteristics.PenisLengthErect == nil && b.SexualCharacteristics.PenisLengthErect != nil {
-		a.SexualCharacteristics.PenisLengthErect = b.SexualCharacteristics.PenisLengthErect
-	}
-	if a.SexualCharacteristics.PubicHair == "" && b.SexualCharacteristics.PubicHair != "" {
-		a.SexualCharacteristics.PubicHair = b.SexualCharacteristics.PubicHair
-	}
-	if a.SexualCharacteristics.Other == "" && b.SexualCharacteristics.Other != "" {
-		a.SexualCharacteristics.Other = b.SexualCharacteristics.Other
-	}
+	a.SexualCharacteristics.Genitalia = cmp.Or(a.SexualCharacteristics.Genitalia, b.SexualCharacteristics.Genitalia)
+	a.SexualCharacteristics.PenisLengthFlaccid = cmp.Or(a.SexualCharacteristics.PenisLengthFlaccid, b.SexualCharacteristics.PenisLengthFlaccid)
+	a.SexualCharacteristics.PenisLengthErect = cmp.Or(a.SexualCharacteristics.PenisLengthErect, b.SexualCharacteristics.PenisLengthErect)
+	a.SexualCharacteristics.PubicHair = cmp.Or(a.SexualCharacteristics.PubicHair, b.SexualCharacteristics.PubicHair)
+	a.SexualCharacteristics.Other = cmp.Or(a.SexualCharacteristics.Other, b.SexualCharacteristics.Other)
 
-	// list: union unique, preserve base order first then new
 	if len(b.NotableActions) > 0 {
-		seen := map[string]struct{}{}
 		var out []string
 		for _, s := range a.NotableActions {
 			s = strings.TrimSpace(s)
-			if s == "" {
-				continue
+			if s != "" {
+				out = append(out, s)
 			}
-			if _, ok := seen[s]; ok {
-				continue
-			}
-			seen[s] = struct{}{}
-			out = append(out, s)
 		}
-		for _, s := range b.NotableActions {
-			s = strings.TrimSpace(s)
-			if s == "" {
+
+	NextAction:
+		for _, nb := range b.NotableActions {
+			nb = strings.TrimSpace(nb)
+			if nb == "" {
 				continue
 			}
-			if _, ok := seen[s]; ok {
-				continue
+
+			for i, existing := range out {
+				if sim := utils.Similarity(existing, nb); sim >= 0.7 {
+					// Prefer the longer one
+					if len(nb) > len(existing) {
+						out[i] = nb
+					}
+					continue NextAction
+				}
 			}
-			seen[s] = struct{}{}
-			out = append(out, s)
+			out = append(out, nb)
 		}
 		a.NotableActions = out
 	}
 
 	return a
-}
-
-// guard if your Inferencer is missing capabilities
-func require[T any](ok bool, _ T) error {
-	if !ok {
-		return errors.New("capability not implemented")
-	}
-	return nil
 }
 
 func (s *Server) handleSummarize(c echo.Context) error {
