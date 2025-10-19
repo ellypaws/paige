@@ -38,13 +38,17 @@ func main() {
 
 	f, err := os.Open("CharacterSummary.json")
 	if err == nil {
-		var summary schema.Summary
-		err := json.NewDecoder(f).Decode(&summary)
+		var summaries map[string]schema.Summary
+		err := json.NewDecoder(f).Decode(&summaries)
 		if err != nil {
 			log.Warnf("Failed to decode CharacterSummary.json: %v", err)
 		} else {
-			srv.Characters = summary.Characters
-			log.Infof("Loaded %d characters from CharacterSummary.json", len(srv.Characters))
+			srv.Summary = summaries
+			var char int
+			for _, summary := range summaries {
+				char += len(summary.Characters)
+			}
+			log.Infof("Loaded %d characters from CharacterSummary.json", char)
 		}
 	}
 

@@ -14,7 +14,7 @@ import (
 type Server struct {
 	Echo       *echo.Echo
 	Inferencer inference.Inferencer
-	Characters []schema.Character
+	Summary    map[string]schema.Summary
 	Ctx        context.Context
 }
 

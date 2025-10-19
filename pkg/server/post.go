@@ -23,6 +23,8 @@ type namesReq struct {
 }
 type summarizeReq struct {
 	Text       string             `json:"text"`
+	ID         string             `json:"id,omitempty"`
+	Chapter    string             `json:"chapter,omitempty"`
 	Characters []schema.Character `json:"characters"`
 	Timeline   []schema.Timeline  `json:"timeline"`
 }
@@ -143,10 +145,6 @@ func heuristicCharsFromText(text string) []Character {
 	return out
 }
 
-type summarizeModelResp struct {
-	Characters []schema.Character `json:"characters"`
-}
-
 // POST /api/summarize
 func (s *Server) handlePostSummarize(c echo.Context) error {
 	var req summarizeReq
@@ -154,24 +152,25 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid json")
 	}
 	req.Text = strings.TrimSpace(req.Text)
-	if len(req.Characters) == 0 && len(s.Characters) > 0 {
-		req.Characters = s.Characters
+	if len(req.Characters) == 0 && len(s.Summary) > 0 {
+		req.Characters = s.Summary[req.ID].Characters
+		req.Timeline = s.Summary[req.ID].Timeline
 	}
 	seed := dedupeByName(req.Characters)
 
 	if req.Text == "" {
-		return c.JSON(http.StatusOK, schema.Summary{Characters: seed})
+		return c.JSON(http.StatusOK, schema.Summary{Characters: seed, Timeline: req.Timeline})
 	}
 
 	chunks := utils.ChunkText(req.Text, 8192*4)
 	ctx := c.Request().Context()
-	accum := req.Characters
+	summary := schema.Summary{Characters: seed, Timeline: req.Timeline}
 
 	w := utils.NewSSEWriter(c)
 	defer w.Close()
 
 	systemPrompt := summarizePrompt
-	for i, char := range s.Characters {
+	for i, char := range req.Characters {
 		if strings.Contains(systemPrompt, "Example") {
 			break
 		}
@@ -182,7 +181,7 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 				break
 			}
 		}
-		if i == len(s.Characters)-1 {
+		if i == len(s.Summary)-1 {
 			c.Logger().Warnf("no example character available for summarization prompt")
 		}
 	}
@@ -192,8 +191,8 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 			break
 		}
 
-		if len(accum) > 0 {
-			bin, err := json.MarshalIndent(schema.Summary{Characters: accum}, "", " ")
+		if len(summary.Characters) > 0 || len(summary.Timeline) > 0 {
+			bin, err := json.MarshalIndent(summary, "", " ")
 			if err != nil {
 				return c.JSON(http.StatusInternalServerError, utils.ErrJSON("failed preparing summarization context"))
 			}
@@ -249,15 +248,16 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 			}
 		}
 
-		var parsed summarizeModelResp
+		var parsed schema.Summary
 		if err := json.Unmarshal([]byte(out), &parsed); err != nil || len(parsed.Characters) == 0 {
 			c.Logger().Errorf("summarization parse error or empty result on chunk %d: %v", i+1, err)
 			c.Logger().Debugf("model output:\n```\n%s\n```", out)
 			continue
 		}
 
-		accum = mergeCharacters(accum, dedupeByName(parsed.Characters))
-		if err := w.Event("data", schema.Summary{Characters: accum}); err != nil {
+		summary.Characters = mergeCharacters(summary.Characters, dedupeByName(parsed.Characters))
+		summary.Timeline = mergeTimelines(summary.Timeline, parsed.Timeline)
+		if err := w.Event("data", summary); err != nil {
 			c.Logger().Errorf("SSE write error: %v", err)
 			return c.JSON(http.StatusInternalServerError, utils.ErrJSON("failed sending summarization progress"))
 		}
@@ -267,14 +267,13 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 		return nil
 	}
 
-	if len(accum) == 0 && len(seed) == 0 {
+	if len(summary.Characters) == 0 && len(seed) == 0 {
 		return c.JSON(http.StatusInternalServerError, utils.ErrJSON("failed parsing summarization result"))
 	}
 
-	s.Characters = accum
-	_ = w.Event("done", schema.Summary{Characters: mergeCharacters(seed, accum)})
+	s.Summary[req.ID] = summary
 
-	return nil
+	return w.Event("done", summary)
 }
 
 func cancelled(c echo.Context) bool {
@@ -441,4 +440,48 @@ func mergeOne(a, b schema.Character) schema.Character {
 	}
 
 	return a
+}
+
+// mergeTimelines merges timeline slices with 70% similarity threshold
+func mergeTimelines(base, updates []schema.Timeline) []schema.Timeline {
+	dateMap := make(map[string][]schema.Event)
+	for _, t := range base {
+		dateMap[t.Date] = append(dateMap[t.Date], t.Events...)
+	}
+
+	for _, up := range updates {
+		existing := dateMap[up.Date]
+		for _, newEv := range up.Events {
+			found := false
+			for i, oldEv := range existing {
+				// Compare similarity by description and time
+				if utils.Similarity(oldEv.Description, newEv.Description) >= 0.70 ||
+					utils.Similarity(oldEv.Time, newEv.Time) >= 0.70 {
+					// Merge by preferring longer / newer details
+					if len(newEv.Description) > len(oldEv.Description) {
+						existing[i].Description = newEv.Description
+					}
+					if oldEv.Time == "" && newEv.Time != "" {
+						existing[i].Time = newEv.Time
+					}
+					found = true
+					break
+				}
+			}
+			if !found {
+				existing = append(existing, newEv)
+			}
+		}
+		dateMap[up.Date] = existing
+	}
+
+	// convert map back to slice
+	out := make([]schema.Timeline, 0, len(dateMap))
+	for date, events := range dateMap {
+		out = append(out, schema.Timeline{Date: date, Events: events})
+	}
+	slices.SortFunc(out, func(a, b schema.Timeline) int {
+		return strings.Compare(a.Date, b.Date)
+	})
+	return out
 }
