@@ -16,7 +16,7 @@ The JSON object must have two root keys: 'characters' and 'timeline'.
   * 'personality': A summary of their key personality traits.
   * 'physical_description': An object with keys for 'height', 'build', 'hair', and 'other' details. Do not put 'age' or 'gender' here.
   * 'sexual_characteristics': An object with keys for 'genitalia', 'penis_length_flaccid', 'penis_length_erect', 'pubic_hair', and 'other'.
-  * 'notable_actions': An array of strings listing their most significant actions. Avoid small, insignificant actions that do not describe the character or major events.
+  * 'notable_actions': An maximum array of 3-5 of strings listing their most significant events or their character. Avoid small, insignificant actions that do not describe the character or major events.
 
 **Timeline**:
 - 'timeline' is an array of objects, each representing a date with major or notable events, and must include:
@@ -37,7 +37,8 @@ The JSON object must have two root keys: 'characters' and 'timeline'.
 - Keep the JSON response as compact as possible.
 - Only keep notable events in the timeline that involve significant actions or character interactions.
 - Avoid removing other details that were already in place when iterating; only change estimates if they now have explicit information.
-- Keep actions and events mostly on the timeline rather than 'notable_actions', as the latter is for character-defining actions.
+- Keep notable actions and events mostly on the timeline rather than 'notable_actions', as the latter is for character-defining actions.
+- These should not be actions that just so happen in the story as that's more fitting for the timeline.
 - Do not duplicate 'age' or 'gender' inside 'physical_description'; keep them at the character's top level.
 - Include 'species' only when it is explicitly stated or clearly implied.
 - Output only the JSON object.

@@ -395,8 +395,31 @@ func mergeCharacters(base, updates []schema.Character) []schema.Character {
 func mergeOne(a, b schema.Character) schema.Character {
 	a.Age = cmp.Or(a.Age, b.Age)
 	a.Gender = cmp.Or(a.Gender, b.Gender)
+	a.Kind = cmp.Or(a.Kind, b.Kind)
 	a.Role = cmp.Or(a.Role, b.Role)
+	a.Species = cmp.Or(a.Species, b.Species)
 	a.Personality = cmp.Or(a.Personality, b.Personality)
+
+	// Merge aliases uniquely (case-insensitive)
+	if len(b.Aliases) > 0 {
+		seen := make(map[string]struct{}, len(a.Aliases))
+		for _, s := range a.Aliases {
+			if s = strings.TrimSpace(s); s != "" {
+				seen[strings.ToLower(s)] = struct{}{}
+			}
+		}
+		for _, s := range b.Aliases {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			key := strings.ToLower(s)
+			if _, ok := seen[key]; !ok {
+				a.Aliases = append(a.Aliases, s)
+				seen[key] = struct{}{}
+			}
+		}
+	}
 
 	a.PhysicalDescription.Height = cmp.Or(a.PhysicalDescription.Height, b.PhysicalDescription.Height)
 	a.PhysicalDescription.Build = cmp.Or(a.PhysicalDescription.Build, b.PhysicalDescription.Build)
@@ -426,8 +449,7 @@ func mergeOne(a, b schema.Character) schema.Character {
 			}
 
 			for i, existing := range out {
-				if sim := utils.Similarity(existing, nb); sim >= 0.7 {
-					// Prefer the longer one
+				if sim := utils.Similarity(existing, nb); sim >= 0.70 {
 					if len(nb) > len(existing) {
 						out[i] = nb
 					}
