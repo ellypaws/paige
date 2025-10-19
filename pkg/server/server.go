@@ -6,15 +6,15 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
-	"paige/pkg/entities"
 	"paige/pkg/inference"
+	"paige/pkg/schema"
 	"paige/pkg/utils"
 )
 
 type Server struct {
 	Echo       *echo.Echo
 	Inferencer inference.Inferencer
-	Characters []entities.Character
+	Characters []schema.Character
 	Ctx        context.Context
 }
 
@@ -40,13 +40,11 @@ func NewServer(ctx context.Context, inf inference.Inferencer) *Server {
 func (s *Server) registerRoutes() {
 	// existing
 	s.Echo.GET("/", s.handleGetRoot)
-	s.Echo.POST("/infer", s.handlePostInfer)
-	s.Echo.POST("/verify", s.handlePostVerify)
 
 	// new api group for the userscript
 	api := s.Echo.Group("/api")
-	api.POST("/names", s.handlePostNames)         // name detection -> []entities.Character (Name only required)
-	api.POST("/summarize", s.handlePostSummarize) // extend/merge details -> []entities.Character
+	api.POST("/names", s.handlePostNames)         // name detection -> []schema.Character (Name only required)
+	api.POST("/summarize", s.handlePostSummarize) // extend/merge details -> []schema.Character
 
 	// optional: serve the userscript for @require http://localhost:8080/userscript
 	s.Echo.GET("/userscript", s.handleGetUserscript)

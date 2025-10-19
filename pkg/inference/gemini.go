@@ -1,10 +1,12 @@
 package inference
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 
+	"github.com/openai/openai-go/v3"
 	"google.golang.org/genai"
 )
 
@@ -39,15 +41,19 @@ func (o *GeminiInferencer) ChangeConfig(config *genai.ClientConfig) {
 }
 
 // Infer sends text to the OpenAI chat completion endpoint and returns the output.
-func (o *GeminiInferencer) Infer(ctx context.Context, system, user string) (string, error) {
+func (o *GeminiInferencer) Infer(ctx context.Context, params *openai.ChatCompletionNewParams, system, user string) (string, error) {
+	if params == nil {
+		params = new(openai.ChatCompletionNewParams)
+	}
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: genai.NewContentFromText(system, genai.RoleModel),
 		ResponseMIMEType:  "application/json",
+		MaxOutputTokens:   int32(params.MaxCompletionTokens.Value),
 	}
 
 	result, err := o.client.Models.GenerateContent(
 		ctx,
-		o.model,
+		cmp.Or(params.Model, o.model),
 		genai.Text(user),
 		config,
 	)

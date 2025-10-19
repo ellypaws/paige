@@ -11,29 +11,24 @@ import (
 	"github.com/openai/openai-go/v3/packages/param"
 )
 
-type GrokInferencer struct {
+// OpenAIInferencer implements Inferencer using OpenAI's official Go SDK.
+type OpenAIInferencer struct {
 	client *openai.Client
 	apiKey string
 	model  string
 }
 
-// NewGrokInferencer creates a new inferencer instance using OpenAI client.
-func NewGrokInferencer(apiKey string, model string) *GrokInferencer {
-	if model == "" {
-		model = "grok-4-fast-reasoning"
-	}
-	client := openai.NewClient(
-		option.WithBaseURL("https://api.x.ai/v1"),
-		option.WithAPIKey(apiKey),
-	)
-	return &GrokInferencer{
+// NewOpenAIInferencer creates a new inferencer instance using OpenAI client.
+func NewOpenAIInferencer(apiKey string, model string) *OpenAIInferencer {
+	client := openai.NewClient(option.WithAPIKey(apiKey))
+	return &OpenAIInferencer{
 		client: &client,
 		apiKey: apiKey,
 		model:  model,
 	}
 }
 
-func (o *GrokInferencer) ChangeBaseURL(baseURL string) {
+func (o *OpenAIInferencer) ChangeBaseURL(baseURL string) {
 	client := openai.NewClient(
 		option.WithAPIKey(o.apiKey),
 		option.WithBaseURL(baseURL),
@@ -41,12 +36,12 @@ func (o *GrokInferencer) ChangeBaseURL(baseURL string) {
 	o.client = &client
 }
 
-func (o *GrokInferencer) SetModel(model string) {
+func (o *OpenAIInferencer) SetModel(model string) {
 	o.model = model
 }
 
 // Infer sends text to the OpenAI chat completion endpoint and returns the output.
-func (o *GrokInferencer) Infer(ctx context.Context, params *openai.ChatCompletionNewParams, system, user string) (string, error) {
+func (o *OpenAIInferencer) Infer(ctx context.Context, params *openai.ChatCompletionNewParams, system, user string) (string, error) {
 	if params == nil {
 		params = new(openai.ChatCompletionNewParams)
 	} else {
@@ -71,7 +66,7 @@ func (o *GrokInferencer) Infer(ctx context.Context, params *openai.ChatCompletio
 		},
 	}
 
-	params.MaxCompletionTokens = openai.Int(cmp.Or(params.MaxCompletionTokens.Value, 4096))
+	params.MaxCompletionTokens = openai.Int(cmp.Or(params.MaxCompletionTokens.Value, 4096*4))
 	params.Temperature = openai.Float(cmp.Or(params.Temperature.Value, 0.3))
 	params.TopP = openai.Float(cmp.Or(params.TopP.Value, 1.0))
 
@@ -91,7 +86,7 @@ func (o *GrokInferencer) Infer(ctx context.Context, params *openai.ChatCompletio
 
 // Verify checks that the result is non-empty or conforms to minimal expectations.
 // You could extend this with an OpenAI-based validation or JSON schema.
-func (o *GrokInferencer) Verify(ctx context.Context, result string) (bool, error) {
+func (o *OpenAIInferencer) Verify(ctx context.Context, result string) (bool, error) {
 	if result == "" {
 		return false, errors.New("empty result")
 	}
