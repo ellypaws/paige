@@ -12,10 +12,10 @@ The JSON object must have two root keys: 'characters' and 'timeline'.
   * 'role': A brief, one-sentence description of their role (e.g., "Babysitter," "Mom," "Love Interest").
   * 'age': Age as stated or estimated; if estimated, append an asterisk (e.g., "17*").
   * 'gender': Gender as stated or estimated; if estimated, append an asterisk (e.g., "female*"). This is their preferred gender and not biological sex.
-  * 'species' (optional): Species if explicitly stated or clearly implied; omit if *all* characters are human/unstated.
+  * 'species' (optional): Species if explicitly stated or clearly implied.
   * 'personality': A summary of their key personality traits.
   * 'physical_description': An object with keys for 'height', 'build', 'hair', and 'other' details. Do not put 'age' or 'gender' here.
-  * 'sexual_characteristics': An object with keys for 'genitalia', 'penis_length_flaccid', 'penis_length_erect', 'pubic_hair', and 'other'.
+  * 'sexual_characteristics': An object with keys for 'genitalia', 'penis_length_flaccid', 'penis_length_erect', 'pubic_hair', and 'other'. Mark with an asterisk if it's estimated e.g. 1.5-2 inches*
   * 'notable_actions': An maximum array of 3-5 of strings listing their most significant events or their character. Avoid small, insignificant actions that do not describe the character or major events.
 
 **Timeline**:

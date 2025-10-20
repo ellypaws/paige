@@ -53,22 +53,24 @@ func (o *GrokInferencer) Infer(ctx context.Context, params *openai.ChatCompletio
 		params = &(*params)
 	}
 	params.Model = cmp.Or(params.Model, o.model)
-	params.Messages = []openai.ChatCompletionMessageParamUnion{
-		{
-			OfSystem: &openai.ChatCompletionSystemMessageParam{
-				Role: "system",
-				Content: openai.ChatCompletionSystemMessageParamContentUnion{
-					OfString: param.Opt[string]{Value: system},
-				},
-			}},
-		{
-			OfUser: &openai.ChatCompletionUserMessageParam{
-				Role: "user",
-				Content: openai.ChatCompletionUserMessageParamContentUnion{
-					OfString: param.Opt[string]{Value: user},
+	if len(params.Messages) == 0 {
+		params.Messages = []openai.ChatCompletionMessageParamUnion{
+			{
+				OfSystem: &openai.ChatCompletionSystemMessageParam{
+					Role: "system",
+					Content: openai.ChatCompletionSystemMessageParamContentUnion{
+						OfString: param.Opt[string]{Value: system},
+					},
+				}},
+			{
+				OfUser: &openai.ChatCompletionUserMessageParam{
+					Role: "user",
+					Content: openai.ChatCompletionUserMessageParamContentUnion{
+						OfString: param.Opt[string]{Value: user},
+					},
 				},
 			},
-		},
+		}
 	}
 
 	params.MaxCompletionTokens = openai.Int(cmp.Or(params.MaxCompletionTokens.Value, 4096))

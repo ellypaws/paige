@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/log"
 	"github.com/labstack/echo/v4"
 	"github.com/openai/openai-go/v3"
 
@@ -42,33 +43,39 @@ type Character struct {
 func (s *Server) handlePostNames(c echo.Context) error {
 	var req namesReq
 	if err := c.Bind(&req); err != nil {
+		log.Warn("invalid JSON in /api/names", "error", err)
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid json")
 	}
 	req.Text = strings.TrimSpace(req.Text)
 	if req.Text == "" {
+		log.Warn("empty text received for /api/names")
 		return c.JSON(http.StatusOK, NameInferResponse{Characters: nil})
 	}
 
 	chunks := utils.ChunkText(req.Text, 8192*4)
 	ctx := c.Request().Context()
+	log.Info("processing /api/names", "chunks", len(chunks))
 
 	var accum []Character
-	for _, ch := range chunks {
+	for i, ch := range chunks {
+		log.Debug("inferring name chunk", "index", i+1, "length", len(ch))
 		infer, err := s.Inferencer.Infer(ctx, nil, nameExtractPrompt, ch)
 		if err != nil {
+			log.Warn("inference error on name chunk, falling back to heuristic", "index", i+1, "error", err)
 			accum = mergeNameCharacters(accum, heuristicCharsFromText(ch))
 			continue
 		}
 
 		var part NameInferResponse
 		if err := json.Unmarshal([]byte(infer), &part); err != nil || len(part.Characters) == 0 {
-			utils.Logf("name extraction parse error or empty result, falling back to heuristic: %v", err)
+			log.Warn("name extraction parse error or empty result, using heuristic", "index", i+1, "error", err)
 			accum = mergeNameCharacters(accum, heuristicCharsFromText(ch))
 			continue
 		}
 		accum = mergeNameCharacters(accum, part.Characters)
 	}
 
+	log.Info("completed name extraction", "count", len(accum))
 	return c.JSON(http.StatusOK, NameInferResponse{Characters: accum})
 }
 
@@ -76,11 +83,9 @@ func (s *Server) handlePostNames(c echo.Context) error {
 func mergeNameCharacters(base, updates []Character) []Character {
 	by := func(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 
-	// index existing by name
 	idx := make(map[string]int, len(base))
 	for i, ch := range base {
-		k := by(ch.Name)
-		if k != "" {
+		if k := by(ch.Name); k != "" {
 			idx[k] = i
 		}
 	}
@@ -92,7 +97,6 @@ func mergeNameCharacters(base, updates []Character) []Character {
 		}
 		k := by(name)
 		if i, ok := idx[k]; ok {
-			// merge aliases into base[i]
 			seen := make(map[string]struct{}, len(base[i].Aliases))
 			for _, a := range base[i].Aliases {
 				a = strings.TrimSpace(a)
@@ -112,9 +116,8 @@ func mergeNameCharacters(base, updates []Character) []Character {
 				base[i].Aliases = append(base[i].Aliases, a)
 			}
 		} else {
-			// normalize aliases on insert
 			seen := map[string]struct{}{}
-			ali := make([]string, 0, len(up.Aliases))
+			var ali []string
 			for _, a := range up.Aliases {
 				a = strings.TrimSpace(a)
 				if a == "" || strings.EqualFold(a, name) {
@@ -133,8 +136,8 @@ func mergeNameCharacters(base, updates []Character) []Character {
 	return base
 }
 
-// Use your conservative heuristic on the original text, adapt to []Character.
 func heuristicCharsFromText(text string) []Character {
+	log.Debug("using heuristic name detection", "length", len(text))
 	var out []Character
 	for _, ec := range detectNamesHeuristically(text) {
 		n := strings.TrimSpace(ec.Name)
@@ -142,6 +145,7 @@ func heuristicCharsFromText(text string) []Character {
 			out = append(out, Character{Name: n})
 		}
 	}
+	log.Debug("heuristic name detection completed", "count", len(out))
 	return out
 }
 
@@ -149,16 +153,21 @@ func heuristicCharsFromText(text string) []Character {
 func (s *Server) handlePostSummarize(c echo.Context) error {
 	var req summarizeReq
 	if err := c.Bind(&req); err != nil {
+		log.Error("invalid JSON in /api/summarize", "error", err)
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid json")
 	}
 	req.Text = strings.TrimSpace(req.Text)
+	log.Info("starting summarization", "id", req.ID, "chars", len(req.Text), "chapters", len(req.Timeline))
+
 	if len(req.Characters) == 0 && len(s.Summary) > 0 {
 		req.Characters = s.Summary[req.ID].Characters
 		req.Timeline = s.Summary[req.ID].Timeline
+		log.Debug("loaded previous summary context", "characters", len(req.Characters), "timeline", len(req.Timeline))
 	}
 	seed := dedupeByName(req.Characters)
 
 	if req.Text == "" {
+		log.Warn("empty text in summarization, returning existing data")
 		return c.JSON(http.StatusOK, schema.Summary{Characters: seed, Timeline: req.Timeline})
 	}
 
@@ -182,18 +191,20 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 			}
 		}
 		if i == len(s.Summary)-1 {
-			c.Logger().Warnf("no example character available for summarization prompt")
+			log.Warn("no example character available for summarization prompt")
 		}
 	}
 
 	for i, chunk := range chunks {
 		if cancelled(c) {
+			log.Warn("summarization cancelled by client", "index", i)
 			break
 		}
 
 		if len(summary.Characters) > 0 || len(summary.Timeline) > 0 {
 			bin, err := json.MarshalIndent(summary, "", " ")
 			if err != nil {
+				log.Warn("failed preparing summarization context", "error", err)
 				return c.JSON(http.StatusInternalServerError, utils.ErrJSON("failed preparing summarization context"))
 			}
 			chunk += "\n\nIterate on the following JSON, only changing details if mentioned or explicitly stated:\n" + string(bin)
@@ -204,14 +215,16 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 		}
 
 		totalTokens := int64(len(systemPrompt) + len(chunk))
+		log.Debug("summarizing chunk", "index", i+1, "of", len(chunks), "chars", len(chunk), "tokens", totalTokens)
+
 		params := &openai.ChatCompletionNewParams{
 			MaxCompletionTokens: openai.Int(totalTokens * 2),
 			ResponseFormat:      schema.StructuredOutputsResponseFormat(),
 		}
-		c.Logger().Debugf("summarizing chunk %d/%d (%d chars)", i+1, len(chunks), totalTokens)
+
 		out, err := s.Inferencer.Infer(ctx, params, systemPrompt, chunk)
 		if err != nil {
-			c.Logger().Errorf("summarization inference error on chunk %d: %v", i+1, err)
+			log.Warn("summarization inference error", "chunk", i+1, "error", err)
 			_ = w.Event("error", map[string]string{"chunk": strconv.Itoa(i + 1), "error": err.Error()})
 			break
 		}
@@ -225,16 +238,17 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 				out = out[idx+len("</think>"):]
 			}
 		}
+
 		if len(out) == 0 {
-			c.Logger().Errorf("summarization empty result on chunk %d", i+1)
+			log.Warn("summarization returned empty output", "chunk", i+1)
 			continue
 		}
 		if out[0] != '{' {
 			if j := strings.Index(out, "{"); j != -1 {
 				out = out[j:]
 			} else {
-				c.Logger().Errorf("summarization no JSON result on chunk %d", i+1)
-				c.Logger().Debugf("model output:\n```\n%s\n```", out)
+				log.Warn("no JSON start found in summarization output", "chunk", i+1)
+				log.Debug("raw output", "output", out)
 				continue
 			}
 		}
@@ -242,36 +256,41 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 			if j := strings.LastIndex(out, "}"); j != -1 {
 				out = out[:j+1]
 			} else {
-				c.Logger().Errorf("summarization no JSON result on chunk %d", i+1)
-				c.Logger().Debugf("model output:\n```\n%s\n```", out)
+				log.Warn("no JSON end found in summarization output", "chunk", i+1)
+				log.Debug("raw output", "output", out)
 				continue
 			}
 		}
 
 		var parsed schema.Summary
 		if err := json.Unmarshal([]byte(out), &parsed); err != nil || len(parsed.Characters) == 0 {
-			c.Logger().Errorf("summarization parse error or empty result on chunk %d: %v", i+1, err)
-			c.Logger().Debugf("model output:\n```\n%s\n```", out)
+			log.Warn("failed to parse summarization JSON", "chunk", i+1, "error", err)
+			log.Debug("model output", "output", out)
 			continue
 		}
 
+		log.Debug("merging summarization results", "chunk", i+1, "chars", len(parsed.Characters), "events", len(parsed.Timeline))
 		summary.Characters = mergeCharacters(summary.Characters, dedupeByName(parsed.Characters))
 		summary.Timeline = mergeTimelines(summary.Timeline, parsed.Timeline)
+
 		if err := w.Event("data", summary); err != nil {
-			c.Logger().Errorf("SSE write error: %v", err)
+			log.Warn("SSE write error", "error", err)
 			return c.JSON(http.StatusInternalServerError, utils.ErrJSON("failed sending summarization progress"))
 		}
 	}
 
 	if cancelled(c) {
+		log.Warn("summarization aborted after client disconnect")
 		return nil
 	}
 
 	if len(summary.Characters) == 0 && len(seed) == 0 {
+		log.Warn("no summary data extracted")
 		return c.JSON(http.StatusInternalServerError, utils.ErrJSON("failed parsing summarization result"))
 	}
 
 	s.Summary[req.ID] = summary
+	log.Info("summarization complete", "id", req.ID, "characters", len(summary.Characters), "timeline", len(summary.Timeline))
 
 	return w.Event("done", summary)
 }
@@ -393,12 +412,12 @@ func mergeCharacters(base, updates []schema.Character) []schema.Character {
 }
 
 func mergeOne(a, b schema.Character) schema.Character {
-	a.Age = cmp.Or(a.Age, b.Age)
-	a.Gender = cmp.Or(a.Gender, b.Gender)
-	a.Kind = cmp.Or(a.Kind, b.Kind)
-	a.Role = cmp.Or(a.Role, b.Role)
-	a.Species = cmp.Or(a.Species, b.Species)
-	a.Personality = cmp.Or(a.Personality, b.Personality)
+	a.Age = cmp.Or(b.Age, a.Age)
+	a.Gender = cmp.Or(b.Gender, a.Gender)
+	a.Kind = cmp.Or(b.Kind, a.Kind)
+	a.Role = cmp.Or(b.Role, a.Role)
+	a.Species = cmp.Or(b.Species, a.Species)
+	a.Personality = cmp.Or(b.Personality, a.Personality)
 
 	// Merge aliases uniquely (case-insensitive)
 	if len(b.Aliases) > 0 {
@@ -421,16 +440,16 @@ func mergeOne(a, b schema.Character) schema.Character {
 		}
 	}
 
-	a.PhysicalDescription.Height = cmp.Or(a.PhysicalDescription.Height, b.PhysicalDescription.Height)
-	a.PhysicalDescription.Build = cmp.Or(a.PhysicalDescription.Build, b.PhysicalDescription.Build)
-	a.PhysicalDescription.Hair = cmp.Or(a.PhysicalDescription.Hair, b.PhysicalDescription.Hair)
-	a.PhysicalDescription.Other = cmp.Or(a.PhysicalDescription.Other, b.PhysicalDescription.Other)
+	a.PhysicalDescription.Height = cmp.Or(b.PhysicalDescription.Height, a.PhysicalDescription.Height)
+	a.PhysicalDescription.Build = cmp.Or(b.PhysicalDescription.Build, a.PhysicalDescription.Build)
+	a.PhysicalDescription.Hair = cmp.Or(b.PhysicalDescription.Hair, a.PhysicalDescription.Hair)
+	a.PhysicalDescription.Other = cmp.Or(b.PhysicalDescription.Other, a.PhysicalDescription.Other)
 
-	a.SexualCharacteristics.Genitalia = cmp.Or(a.SexualCharacteristics.Genitalia, b.SexualCharacteristics.Genitalia)
-	a.SexualCharacteristics.PenisLengthFlaccid = cmp.Or(a.SexualCharacteristics.PenisLengthFlaccid, b.SexualCharacteristics.PenisLengthFlaccid)
-	a.SexualCharacteristics.PenisLengthErect = cmp.Or(a.SexualCharacteristics.PenisLengthErect, b.SexualCharacteristics.PenisLengthErect)
-	a.SexualCharacteristics.PubicHair = cmp.Or(a.SexualCharacteristics.PubicHair, b.SexualCharacteristics.PubicHair)
-	a.SexualCharacteristics.Other = cmp.Or(a.SexualCharacteristics.Other, b.SexualCharacteristics.Other)
+	a.SexualCharacteristics.Genitalia = cmp.Or(b.SexualCharacteristics.Genitalia, a.SexualCharacteristics.Genitalia)
+	a.SexualCharacteristics.PenisLengthFlaccid = cmp.Or(b.SexualCharacteristics.PenisLengthFlaccid, a.SexualCharacteristics.PenisLengthFlaccid)
+	a.SexualCharacteristics.PenisLengthErect = cmp.Or(b.SexualCharacteristics.PenisLengthErect, a.SexualCharacteristics.PenisLengthErect)
+	a.SexualCharacteristics.PubicHair = cmp.Or(b.SexualCharacteristics.PubicHair, a.SexualCharacteristics.PubicHair)
+	a.SexualCharacteristics.Other = cmp.Or(b.SexualCharacteristics.Other, a.SexualCharacteristics.Other)
 
 	if len(b.NotableActions) > 0 {
 		var out []string

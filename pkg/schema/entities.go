@@ -7,12 +7,12 @@ type Summary struct {
 
 type Character struct {
 	Name                  string                `json:"name" jsonschema_description:"Canonical character name"`
-	Age                   string                `json:"age,omitempty" jsonschema_description:"Age as stated or estimated (use an asterisk if estimated)"`
-	Gender                string                `json:"gender,omitempty" jsonschema_description:"Gender as stated or estimated (use an asterisk if estimated)"`
+	Age                   string                `json:"age" jsonschema_description:"Age as stated or estimated (use an asterisk if estimated)"`
+	Gender                string                `json:"gender" jsonschema_description:"Gender as stated or estimated (use an asterisk if estimated)"`
 	Aliases               []string              `json:"aliases" jsonschema_description:"Nicknames or alternative names used for this character"`
 	Kind                  string                `json:"kind" jsonschema:"enum=main,enum=major,enum=minor" jsonschema_description:"Prominence classification of the character (main, major, or minor)"`
 	Role                  string                `json:"role" jsonschema_description:"One-sentence description of the character’s role (e.g., Babysitter, Mom, Love Interest)"`
-	Species               string                `json:"species,omitempty" jsonschema_description:"Species if stated or relevant (omit if *all* characters are human or unstated)"`
+	Species               string                `json:"species" jsonschema_description:"Species if stated or relevant (omit if *all* characters are human or unstated)"`
 	Personality           string                `json:"personality" jsonschema_description:"Key personality traits summarized from the text"`
 	PhysicalDescription   PhysicalDescription   `json:"physical_description" jsonschema_description:"Physical attributes; mark with an asterisk when interpolated"`
 	SexualCharacteristics SexualCharacteristics `json:"sexual_characteristics" jsonschema_description:"Sexual characteristics; fill as much as possible, mark with an asterisk (*) when interpolated"`
@@ -28,7 +28,7 @@ type PhysicalDescription struct {
 
 type SexualCharacteristics struct {
 	Genitalia          string  `json:"genitalia,omitempty" jsonschema_description:"Genital description if stated or reasonably estimated"`
-	PenisLengthFlaccid *string `json:"penis_length_flaccid,omitempty" jsonschema_description:"Penis length when flaccid if stated or estimated (string to allow ranges/notes)"`
+	PenisLengthFlaccid *string `json:"penis_length_flaccid,omitempty" jsonschema_description:"Penis length when flaccid if stated or estimated (string to allow ranges/notes) e.g. 1.5-2 inches*"`
 	PenisLengthErect   *string `json:"penis_length_erect,omitempty" jsonschema_description:"Penis length when erect if stated or estimated (string to allow ranges/notes)"`
 	PubicHair          string  `json:"pubic_hair,omitempty" jsonschema_description:"Pubic hair description if stated"`
 	Other              string  `json:"other,omitempty" jsonschema_description:"Other relevant sexual characteristics explicitly mentioned"`
