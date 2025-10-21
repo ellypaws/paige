@@ -264,7 +264,10 @@
         id: 'inkbunny',
         source: 'inkbunny',
         name: 'Inkbunny',
-        match: () => location.hostname.includes('inkbunny.net'),
+        // Only match InkBunny when the page actually contains the expected story container
+        match: () => location.hostname.includes('inkbunny.net') && (
+            !!document.querySelector('#storysectionfoo') || !!document.querySelector('#storysectionbar')
+        ),
         isFullWork: () => false, // stories are single text blocks on a page
         parseWorkAndChapterID() {
             // Strictly extract InkBunny submission ID from /s/2869684
