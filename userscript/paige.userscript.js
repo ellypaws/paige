@@ -1,11 +1,13 @@
 // ==UserScript==
-// @name         AO3 Smart Name Highlighter + Pronoun Colorizer (SSE, Timeline, Aliases)
-// @namespace    ao3-smart-names
-// @version      1.6.3
-// @description  Highlight names & pronouns on AO3. Streams /api/summarize (SSE), updates on EVERY event, canonical alias merging, side panel + timeline, and smart tooltip truncation of notable actions only.
+// @name         AO3/Inkbunny Smart Name Highlighter + Pronoun Colorizer (SSE, Timeline, Aliases)
+// @namespace    ao3-inkbunny-smart-names
+// @version      1.7.0
+// @description  Highlight names & pronouns on AO3 and Inkbunny. Streams /api/summarize (SSE), updates on EVERY event, canonical alias merging, side panel + timeline, and tooltip truncation of notable actions only.
 // @author       you
 // @match        https://archiveofourown.org/works/*
 // @match        https://archiveofourown.org/chapters/*
+// @match        https://inkbunny.net/s/*
+// @icon         https://github.com/ellypaws/inkbunny-extension/blob/main/public/favicon.ico?raw=true
 // @run-at       document-idle
 // @grant        GM_addStyle
 // @require      https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js
@@ -17,17 +19,11 @@
     /** ---------------------------------------
      * Constants & Config
      * ------------------------------------- */
+
+    /** Backend endpoints */
     const SUMMARIZE_URL = 'http://localhost:8080/api/summarize';
 
-    const STORY_SELECTORS = [
-        '#workskin .userstuff',
-        '#workskin .preface .notes',
-    ];
-
-    const EXCLUDE_SELECTORS = [
-        '#feedback', '#comments', 'nav', 'header', 'footer', '.splash', '.index', '.bookmark', '.tags',
-    ];
-
+    /** Pronouns to colorize (case-insensitive word matches). */
     const PRONOUNS = [
         'he', 'him', 'his', 'himself',
         'she', 'her', 'hers', 'herself',
@@ -38,12 +34,18 @@
         'it', 'its', 'itself'
     ];
 
+    /** Mentions heuristics for major/minor classification. */
     const MIN_MAJOR_MENTIONS = 6;
     const MIN_MINOR_MENTIONS = 2;
 
-    const WORK_ID = (location.pathname.match(/\/(works|chapters)\/(\d+)/) || []).slice(1).join(':') || location.pathname;
-    const LS_KEY = `ao3-smart-names:v1:${WORK_ID}`;
+    /** Work-scoped key (per-site). */
+    const WORK_ID = (location.hostname.includes('archiveofourown.org')
+        ? ((location.pathname.match(/\/(works|chapters)\/(\d+)/) || []).slice(1).join(':') || location.pathname)
+        : (location.pathname + location.search || location.pathname)) || location.href;
 
+    const LS_KEY = `ao3-smart-names:v1:${location.hostname}:${WORK_ID}`;
+
+    /** CSS class names used by the script. */
     const CLS = {
         name: 'ao3sn-name',
         pronoun: 'ao3sn-pronoun',
@@ -176,6 +178,128 @@
   `);
 
     /** ---------------------------------------
+     * Site Adapters
+     * ------------------------------------- */
+
+    /**
+     * @typedef {{
+     *   id: 'ao3'|'inkbunny',
+     *   source: 'ao3'|'inkbunny',
+     *   match: ()=>boolean,
+     *   isFullWork: ()=>boolean,
+     *   parseWorkAndChapterID: ()=>{id:string, chapter:string},
+     *   collectChapters: ()=>{article:Element, chapterId:string, text:string}[],
+     *   collectSingleText: ()=>string,
+     *   findWrapTargets: ()=>Element[],
+     *   name: string
+     * }} SiteAdapter
+     */
+
+    /** AO3 adapter */
+    const AO3Adapter = /** @type {SiteAdapter} */({
+        id: 'ao3',
+        source: 'ao3',
+        name: 'Archive of Our Own',
+        match: () => location.hostname.includes('archiveofourown.org'),
+        isFullWork: () => new URLSearchParams(window.location.search).get("view_full_work") === "true",
+        parseWorkAndChapterID() {
+            const m = location.pathname.match(/\/works\/(\d+)(?:\/chapters\/(\d+))?/);
+            return { id: m?.[1] || "", chapter: m?.[2] || "" };
+        },
+        collectChapters() {
+            const out = [];
+            document.querySelectorAll("div.chapter").forEach(ch => {
+                const article =
+                    ch.querySelector('div.userstuff.module[role="article"]') ||
+                    ch.querySelector('[role="article"].userstuff') ||
+                    ch.querySelector('.userstuff');
+                if (!article) return;
+
+                let chapterId = '';
+                const idMatch = (ch.id || '').match(/^chapter-(\d+)/);
+                if (idMatch) chapterId = idMatch[1];
+                if (!chapterId) {
+                    const link = ch.querySelector('a[href*="/chapters/"]');
+                    const lm = link && link.getAttribute('href').match(/\/chapters\/(\d+)/);
+                    if (lm) chapterId = lm[1];
+                }
+
+                const clone = article.cloneNode(true);
+                const stray = clone.querySelector("h3#work.landmark.heading");
+                if (stray) stray.remove();
+                const text = (clone.innerText || '').trim();
+                if (!text) return;
+
+                out.push({ article, chapterId, text });
+            });
+            return out;
+        },
+        collectSingleText() {
+            const selectors = ['#workskin .userstuff', '#workskin .preface .notes'];
+            const exclude = ['#feedback', '#comments', 'nav', 'header', 'footer', '.splash', '.index', '.bookmark', '.tags'];
+            const nodes = [];
+            selectors.forEach(sel => document.querySelectorAll(sel).forEach(n => nodes.push(n)));
+            const excluded = new Set();
+            exclude.forEach(sel => document.querySelectorAll(sel).forEach(n => excluded.add(n)));
+            const chunks = [];
+            nodes.forEach(root => {
+                if ([...excluded].some(ex => ex.contains(root) || root.contains(ex))) return;
+                chunks.push(root.innerText);
+            });
+            return chunks.join('\n\n').trim();
+        },
+        findWrapTargets() {
+            const selectors = ['#workskin .userstuff', '#workskin .preface .notes'];
+            const exclude = ['#feedback', '#comments', 'nav', 'header', 'footer', '.splash', '.index', '.bookmark', '.tags'];
+            const nodes = [];
+            selectors.forEach(sel => document.querySelectorAll(sel).forEach(n => nodes.push(n)));
+            const excluded = new Set();
+            exclude.forEach(sel => document.querySelectorAll(sel).forEach(n => excluded.add(n)));
+            return nodes.filter(root => ![...excluded].some(ex => ex.contains(root) || root.contains(ex)));
+        }
+    });
+
+    /** Inkbunny adapter */
+    const InkbunnyAdapter = /** @type {SiteAdapter} */({
+        id: 'inkbunny',
+        source: 'inkbunny',
+        name: 'Inkbunny',
+        match: () => location.hostname.includes('inkbunny.net'),
+        isFullWork: () => false, // stories are single text blocks on a page
+        parseWorkAndChapterID() {
+            // Strictly extract InkBunny submission ID from /s/2869684
+            const m = location.pathname.match(/\/s\/(\d+)/);
+            return { id: m ? m[1] : (location.pathname + location.search) || location.pathname, chapter: "" };
+        },
+        collectChapters() {
+            return [];
+        },
+        collectSingleText() {
+            // Typical story container: #storysectionfoo (scroll container) or #storysectionbar inner content.
+            const el = document.querySelector('#storysectionfoo') || document.querySelector('#storysectionbar') || document.querySelector('#content') || document.body;
+            const clone = el.cloneNode(true);
+            const text = (clone.innerText || '').replace(/\u00a0/g, ' ').trim(); // normalize &nbsp;
+            return text;
+        },
+        findWrapTargets() {
+            const targets = [];
+            const primary = document.querySelector('#storysectionfoo') || document.querySelector('#storysectionbar');
+            if (primary) targets.push(primary);
+            // Fallback if Inkbunny theme differs
+            const alt = document.querySelectorAll('#content .content, .pagestuff, #content');
+            alt.forEach(n => {
+                if (!targets.includes(n)) targets.push(n);
+            });
+            return targets.length ? targets : [document.body];
+        }
+    });
+
+    /** Choose active adapter (or bail if neither site). */
+    const ADAPTERS = [AO3Adapter, InkbunnyAdapter];
+    const adapter = ADAPTERS.find(a => a.match());
+    if (!adapter) return; // Not a supported site/page
+
+    /** ---------------------------------------
      * Types (JSDoc)
      * ------------------------------------- */
     /**
@@ -236,6 +360,12 @@
     /** ---------------------------------------
      * Utilities
      * ------------------------------------- */
+
+    /**
+     * Computes a deterministic HSL color for a given name.
+     * @param {string} name
+     * @returns {string} hsl(H S% L%)
+     */
     function nameToColor(name) {
         let h = 0;
         for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
@@ -243,72 +373,6 @@
         const sat = 60 + (h % 20);
         const light = 45 + (h % 10);
         return `hsl(${hue}deg ${sat}% ${light}%)`;
-    }
-
-    function parseWorkAndChapterID() {
-        // /works/:id              -> {id, chapter: ""}
-        // /works/:id/chapters/:c  -> {id, chapter}
-        const m = location.pathname.match(/\/works\/(\d+)(?:\/chapters\/(\d+))?/);
-        return { id: m?.[1] || "", chapter: m?.[2] || "" };
-    }
-
-    function isViewFullWork() {
-        return new URLSearchParams(window.location.search).get("view_full_work") === "true";
-    }
-
-    /**
-     * Return an array of per-chapter targets for full-work pages.
-     * Observes the actual ARTICLE node for reliability; resolves chapterId from
-     * container id (#chapter-123) OR any internal /chapters/:id link if needed.
-     * @returns {{article: Element, chapterId: string, text: string}[]}
-     */
-    function collectChapterArticles() {
-        /** Try the common structure: <div class="chapter" id="chapter-123"><div class="userstuff module" role="article">… */
-        const out = [];
-        document.querySelectorAll("div.chapter").forEach(ch => {
-            const article =
-                ch.querySelector('div.userstuff.module[role="article"]') ||
-                ch.querySelector('[role="article"].userstuff') ||
-                ch.querySelector('.userstuff');
-
-            if (!article) return;
-
-            // Chapter id resolution:
-            let chapterId = '';
-            const idMatch = (ch.id || '').match(/^chapter-(\d+)/);
-            if (idMatch) chapterId = idMatch[1];
-            if (!chapterId) {
-                // Fallback: find any link that references /chapters/:id
-                const link = ch.querySelector('a[href*="/chapters/"]');
-                const lm = link && link.getAttribute('href').match(/\/chapters\/(\d+)/);
-                if (lm) chapterId = lm[1];
-            }
-
-            // Extract readable text
-            const clone = article.cloneNode(true);
-            const stray = clone.querySelector("h3#work.landmark.heading");
-            if (stray) stray.remove();
-            const text = (clone.innerText || '').trim();
-            if (!text) return;
-
-            out.push({ article, chapterId, text });
-        });
-        return out;
-    }
-
-    function collectStoryText() {
-        const nodes = [];
-        for (const sel of STORY_SELECTORS) document.querySelectorAll(sel).forEach(n => nodes.push(n));
-        const excluded = new Set();
-        EXCLUDE_SELECTORS.forEach(sel => {
-            document.querySelectorAll(sel).forEach(n => excluded.add(n));
-        });
-        const chunks = [];
-        nodes.forEach(root => {
-            if ([...excluded].some(ex => ex.contains(root) || root.contains(ex))) return;
-            chunks.push(root.innerText);
-        });
-        return chunks.join('\n\n').trim();
     }
 
     function hslWithAlpha(hsl, a = 0.18) {
@@ -327,6 +391,7 @@
         return { c1, c2 };
     }
 
+    /** Debounce utility. */
     function debounce(fn, ms = 200) {
         let t = null;
         return (...args) => {
@@ -335,11 +400,16 @@
         };
     }
 
-    const ric = window.requestIdleCallback || (cb => setTimeout(() => cb({ timeRemaining: () => 16 }), 1));
+    /** requestIdleCallback shim (basic). */
+    const ric = window.requestIdleCallback || function (cb) {
+        return setTimeout(() => cb({ timeRemaining: () => 16 }), 1);
+    };
 
     /** ---------------------------------------
      * Persistence
      * ------------------------------------- */
+
+    /** Loads persisted state and migrates older schemas. Avatars are not stored. */
     function loadPersist() {
         const freshDefault = {
             characters: {},
@@ -347,13 +417,18 @@
             timeline: [],
             pinnedPanel: false,
             panelHeight: Math.round(window.innerHeight * 0.6),
-            povName: null,
+            povName: null
         };
         try {
             const raw = localStorage.getItem(LS_KEY);
             if (!raw) return freshDefault;
             const parsed = JSON.parse(raw);
-            const out = { ...freshDefault, ...parsed };
+            const out = {
+                ...freshDefault, ...parsed,
+                characters: parsed.characters || {},
+                pronouns: parsed.pronouns || {},
+                timeline: parsed.timeline || []
+            };
             for (const v of Object.values(out.characters)) {
                 if (v && 'avatar' in v) delete v.avatar;
             }
@@ -363,6 +438,7 @@
         }
     }
 
+    /** Prunes big fields if localStorage quota is exceeded. */
     function prunePersist(persist) {
         for (const v of Object.values(persist.characters)) {
             if ('avatar' in v) delete v.avatar;
@@ -378,6 +454,7 @@
         if (persist.timeline && persist.timeline.length > 50) persist.timeline = persist.timeline.slice(-50);
     }
 
+    /** Writes persist safely; prunes on QuotaExceededError. */
     function savePersistSafe(persist) {
         if (window.__AO3SN_PERSIST_DISABLED__) return;
         try {
@@ -388,7 +465,7 @@
                     prunePersist(persist);
                     localStorage.setItem(LS_KEY, JSON.stringify(persist));
                 } catch (e2) {
-                    console.warn('[AO3SN] Persist disabled: quota still exceeded after pruning.', e2);
+                    console.warn('[Paige] Persist disabled: quota still exceeded after pruning.', e2);
                     window.__AO3SN_PERSIST_DISABLED__ = true;
                 }
             } else {
@@ -397,17 +474,28 @@
         }
     }
 
+    /**
+     * Saves persisted state immediately.
+     * @param {Persist} data
+     */
     function savePersist(data) {
         localStorage.setItem(LS_KEY, JSON.stringify(data));
     }
 
-    const scheduleSave = (() => {
+    /** Debounced saver to avoid frequent writes during scanning. */
+    const scheduleSave = ((/* capture */) => {
         const fn = debounce(() => savePersistSafe(persist), 500);
         return () => fn();
     })();
 
+    /** In-memory (non-persisted) avatar cache. */
     const AVATAR_CACHE = new Map();
 
+    /**
+     * Returns a dataURL avatar for name+color without storing it in localStorage.
+     * @param {string} name
+     * @param {string} color
+     */
     function getAvatar(name, color) {
         const key = `${name}|${color}`;
         let url = AVATAR_CACHE.get(key);
@@ -418,6 +506,7 @@
         return url;
     }
 
+    /** Creates a round avatar with initials for a given name. */
     function makeAvatarDataURL(name, color) {
         const initials = name.split(/\s+/).map(s => s[0] || '').join('').slice(0, 2).toUpperCase();
         const canvas = document.createElement('canvas');
@@ -447,73 +536,16 @@
     }
 
     /** ---------------------------------------
-     * Alias normalization & name sets
+     * Backend (SSE) helpers
      * ------------------------------------- */
-    let aliasIndex = Object.create(null);
 
-    function rebuildAliasIndex() {
-        aliasIndex = Object.create(null);
-        for (const [canon, d] of Object.entries(persist.characters)) {
-            for (const a of (d.aliases || [])) aliasIndex[a] = canon;
-        }
-    }
-
-    function normalizeCharactersStore() {
-        const newChars = {};
-        const addAlias = (obj, a) => {
-            if (!a) return;
-            obj.aliases = Array.from(new Set([...(obj.aliases || []), a].filter(Boolean)));
-        };
-
-        for (const [key, d] of Object.entries(persist.characters)) {
-            const canon = (d.name || key).trim();
-            if (!canon) continue;
-
-            let dst = newChars[canon];
-            if (!dst) {
-                dst = newChars[canon] = {
-                    color: d.color || nameToColor(canon),
-                    mentions: d.mentions || 0,
-                    name: canon,
-                    age: d.age, gender: d.gender, aliases: Array.isArray(d.aliases) ? [...new Set(d.aliases)] : [],
-                    kind: d.kind || 'minor', role: d.role, species: d.species, personality: d.personality,
-                    physical_description: d.physical_description || {},
-                    sexual_characteristics: d.sexual_characteristics || {},
-                    notable_actions: Array.isArray(d.notable_actions) ? d.notable_actions.slice(0) : [],
-                };
-            } else {
-                dst.mentions = (dst.mentions || 0) + (d.mentions || 0);
-                dst.age ??= d.age;
-                dst.gender ??= d.gender;
-                dst.role ??= d.role;
-                dst.species ??= d.species;
-                dst.personality ??= d.personality;
-                dst.kind = dst.kind === 'main' || d.kind === 'main' ? 'main' : (dst.kind === 'major' || d.kind === 'major' ? 'major' : (dst.kind || d.kind || 'minor'));
-                dst.physical_description = { ...(dst.physical_description || {}), ...(d.physical_description || {}) };
-                dst.sexual_characteristics = { ...(dst.sexual_characteristics || {}), ...(d.sexual_characteristics || {}) };
-                if (Array.isArray(d.notable_actions)) dst.notable_actions = Array.from(new Set([...(dst.notable_actions || []), ...d.notable_actions]));
-                if (Array.isArray(d.aliases)) dst.aliases = Array.from(new Set([...(dst.aliases || []), ...d.aliases]));
-            }
-            if (key !== canon) addAlias(dst, key);
-        }
-
-        persist.characters = newChars;
-        rebuildAliasIndex();
-        savePersistSafe(persist);
-    }
-
-    function computeNameSet() {
-        const set = new Set();
-        for (const [canon, d] of Object.entries(persist.characters)) {
-            set.add(canon);
-            (d.aliases || []).forEach(a => set.add(a));
-        }
-        return set;
-    }
-
-    /** ---------------------------------------
-     * SSE Helpers
-     * ------------------------------------- */
+    /**
+     * Consume a text/event-stream (SSE) Response body and emit parsed events.
+     * Minimal parser assuming single-line `data:` JSON payload per event.
+     * @param {ReadableStream<Uint8Array>} body
+     * @param {(ev: {event: string, data: any})=>void} onEvent
+     * @returns {Promise<void>}
+     */
     async function readSSE(body, onEvent) {
         const reader = body.getReader();
         const decoder = new TextDecoder();
@@ -540,8 +572,9 @@
     }
 
     /**
-     * Stream summaries; call onUpdate for EVERY event (data/done).
-     * @param {{ text:string, id:string, chapter?:string, characters?: CharacterData[], timeline?: TimelineDay[] }} req
+     * Sends text (and optional seed characters) to /api/summarize, streaming SSE updates.
+     * Calls `onUpdate` on EVERY SSE event (data & done).
+     * @param {{text:string, id:string, chapter?:string, characters?: CharacterData[], timeline?: TimelineDay[], source:'ao3'|'inkbunny'}} req
      * @param {(partial:{characters?: CharacterData[], timeline?: TimelineDay[]})=>void} onUpdate
      */
     async function streamSummarize(req, onUpdate) {
@@ -552,6 +585,7 @@
                 text: req.text,
                 id: req.id,
                 chapter: req.chapter || '',
+                source: req.source,
                 characters: req.characters || [],
                 timeline: req.timeline || []
             }),
@@ -563,8 +597,18 @@
     }
 
     /** ---------------------------------------
-     * Wrapping / Highlight
+     * DOM Helpers (Scanning & Wrapping)
      * ------------------------------------- */
+
+    /** Checks if a text node is safe to manipulate. */
+    function isSafeTextNode(node) {
+        return !!(node && node.isConnected && node.parentNode && node.nodeValue && node.nodeValue.trim());
+    }
+
+    /**
+     * Iterates over eligible text nodes under a root, skipping already wrapped content.
+     * @param {Element} root
+     */
     function* textNodeWalker(root) {
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
             acceptNode(node) {
@@ -579,23 +623,36 @@
         while ((n = walker.nextNode())) yield n;
     }
 
-    function isSafeTextNode(node) {
-        return !!(node && node.isConnected && node.parentNode && node.nodeValue && node.nodeValue.trim());
-    }
-
+    /**
+     * Builds an exact-match regex from a set of known names (and aliases).
+     * Uses word boundaries; supports multi-word names.
+     * @param {Set<string>} nameSet
+     * @returns {RegExp|null}
+     */
     function buildNameRegexExact(nameSet) {
-        const names = [...nameSet].map(s => s && s.trim()).filter(Boolean)
-            .sort((a, b) => b.length - a.length)
+        const names = [...nameSet].map(s => s && s.trim()).filter(Boolean).sort((a, b) => b.length - a.length)
             .map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
         if (!names.length) return null;
         return new RegExp(`\\b(?:${names.join('|')})(?:['’]s)?\\b`, 'gi');
     }
 
+    /**
+     * Builds a case-insensitive pronoun regex with strict word boundaries.
+     * Avoid matching contractions like "he's" / "she's" / "they're".
+     * @param {string[]} prons
+     */
     function buildPronounRegex(prons) {
         const alt = prons.map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
         return new RegExp(`\\b(?:${alt})\\b(?!['’])`, 'gi');
     }
 
+    /**
+     * Replaces matches within a text node with wrapped elements produced by wrapFn.
+     * @param {Text} node
+     * @param {RegExp} matcher
+     * @param {(match: string)=>Node} wrapFn
+     * @returns {boolean} true if replacement occurred
+     */
     function wrapMatchesInTextNode(node, matcher, wrapFn) {
         if (!isSafeTextNode(node) || node.parentElement.dataset.ao3snWrapped === '1') return false;
         const text = node.nodeValue;
@@ -625,6 +682,7 @@
         }
     }
 
+    /** Ensures each character of an element is wrapped in a span for per-letter animation. */
     function ensureLetterSpans(el) {
         if (el.dataset.letterized === '1') return;
         el.dataset.letterized = '1';
@@ -638,6 +696,7 @@
         }
     }
 
+    /** Animates a name element with a brief letter pop when it enters the viewport. */
     function animateName(el) {
         if (el.dataset.animated === '1') return;
         el.dataset.animated = '1';
@@ -655,7 +714,10 @@
         });
     }
 
-    /** Tooltip render (truncate only notable_actions) */
+    /** ---------------------------------------
+     * Tooltip / Info Cards
+     * ------------------------------------- */
+
     function getMaxActionsForScreen() {
         const h = window.innerHeight, w = window.innerWidth;
         if (h < 700 || w < 900) return 4;
@@ -722,6 +784,7 @@
     `;
     }
 
+    /** Creates the information dot element shown next to a name. */
     function makeInfoDot(color) {
         const dot = document.createElement('span');
         dot.className = CLS.infoDot;
@@ -730,6 +793,7 @@
         return dot;
     }
 
+    /** Shows a tooltip for a given dot element. */
     function showTooltip(dot, contentHTML) {
         let tip = dot._tip;
         if (!tip) {
@@ -748,6 +812,7 @@
         });
     }
 
+    /** Hides an active tooltip for a dot element. */
     function hideTooltip(dot) {
         const tip = dot._tip;
         if (!tip) return;
@@ -759,6 +824,11 @@
         }, 160);
     }
 
+    /** ---------------------------------------
+     * POV Controls
+     * ------------------------------------- */
+
+    /** Selects a candidate POV name based on the highest mentions, preferring majors when tied. */
     function determinePOVName(persist) {
         let best = null, bestCount = -1;
         for (const [n, d] of Object.entries(persist.characters)) {
@@ -773,24 +843,369 @@
     }
 
     /** ---------------------------------------
-     * Global state & setup
+     * Alias normalization & name sets
      * ------------------------------------- */
+
+    let aliasIndex = Object.create(null);
+
+    function rebuildAliasIndex() {
+        aliasIndex = Object.create(null);
+        for (const [canon, d] of Object.entries(persist.characters)) {
+            for (const a of (d.aliases || [])) aliasIndex[a] = canon;
+        }
+    }
+
+    function normalizeCharactersStore() {
+        const newChars = {};
+        const addAlias = (obj, a) => {
+            if (!a) return;
+            obj.aliases = Array.from(new Set([...(obj.aliases || []), a].filter(Boolean)));
+        };
+
+        for (const [key, d] of Object.entries(persist.characters)) {
+            const canon = (d.name || key).trim();
+            if (!canon) continue;
+
+            let dst = newChars[canon];
+            if (!dst) {
+                dst = newChars[canon] = {
+                    color: d.color || nameToColor(canon),
+                    mentions: d.mentions || 0,
+                    name: canon,
+                    age: d.age, gender: d.gender, aliases: Array.isArray(d.aliases) ? [...new Set(d.aliases)] : [],
+                    kind: d.kind || 'minor', role: d.role, species: d.species, personality: d.personality,
+                    physical_description: d.physical_description || {},
+                    sexual_characteristics: d.sexual_characteristics || {},
+                    notable_actions: Array.isArray(d.notable_actions) ? d.notable_actions.slice(0) : [],
+                };
+            } else {
+                dst.mentions = (dst.mentions || 0) + (d.mentions || 0);
+                dst.age ??= d.age;
+                dst.gender ??= d.gender;
+                dst.role ??= d.role;
+                dst.species ??= d.species;
+                dst.personality ??= d.personality;
+                dst.kind = dst.kind === 'main' || d.kind === 'main' ? 'main' : (dst.kind === 'major' || d.kind === 'major' ? 'major' : (dst.kind || d.kind || 'minor'));
+                dst.physical_description = { ...(dst.physical_description || {}), ...(d.physical_description || {}) };
+                dst.sexual_characteristics = { ...(dst.sexual_characteristics || {}), ...(d.sexual_characteristics || {}) };
+                if (Array.isArray(d.notable_actions)) dst.notable_actions = Array.from(new Set([...(dst.notable_actions || []), ...d.notable_actions]));
+                if (Array.isArray(d.aliases)) dst.aliases = Array.from(new Set([...(dst.aliases || []), ...d.aliases]));
+            }
+            if (key !== canon) addAlias(dst, key);
+        }
+
+        persist.characters = newChars;
+        rebuildAliasIndex();
+        savePersistSafe(persist);
+    }
+
+    function computeNameSet() {
+        const set = new Set();
+        for (const [canon, d] of Object.entries(persist.characters)) {
+            set.add(canon);
+            (d.aliases || []).forEach(a => set.add(a));
+        }
+        return set;
+    }
+
+    /** ---------------------------------------
+     * Side Panel UI (Characters & Timeline tabs)
+     * ------------------------------------- */
+
+    const throbber = document.createElement('div');
+    throbber.className = CLS.throbber;
+    throbber.textContent = 'Analyzing story';
+    document.body.appendChild(throbber);
+
+    function setThrobber(on) {
+        throbber.style.display = on ? 'block' : 'none';
+    }
+
+    let inflight = 0;
+    const inc = () => {
+        inflight++;
+        setThrobber(true);
+    };
+    const dec = () => {
+        inflight = Math.max(0, inflight - 1);
+        if (!inflight) setThrobber(false);
+    };
+
+    function buildPanel() {
+        const panel = document.createElement('aside');
+        panel.className = CLS.panel + (persist.pinnedPanel ? ` ${CLS.panelPinned}` : '');
+        panel.style.height = `${persist.panelHeight}px`;
+        panel.setAttribute('aria-label', 'Paige panel');
+
+        const header = document.createElement('div');
+        header.className = CLS.panelHeader;
+        const pin = document.createElement('button');
+        pin.className = CLS.iconBtn;
+        pin.textContent = persist.pinnedPanel ? '📌 Shelve' : '📌 Unshelve';
+        pin.addEventListener('click', () => {
+            persist.pinnedPanel = !persist.pinnedPanel;
+            savePersist(persist);
+            panel.classList.toggle(CLS.panelPinned);
+            pin.textContent = panel.classList.contains(CLS.panelPinned) ? '📌 Shelve' : '📌 Unshelve';
+        });
+        const compact = document.createElement('button');
+        compact.className = CLS.iconBtn;
+        compact.textContent = '🗂️ Compact';
+        compact.addEventListener('click', () => {
+            panel.classList.toggle(CLS.panelCollapsed);
+        });
+        const title = document.createElement('div');
+        title.style.fontWeight = '700';
+        title.textContent = adapter.name;
+        header.append(pin, compact, title);
+
+        const tabs = document.createElement('div');
+        tabs.className = CLS.tabs;
+        const tabChars = document.createElement('div');
+        tabChars.className = `${CLS.tab} ${CLS.tabActive}`;
+        tabChars.textContent = 'Characters';
+        const tabTL = document.createElement('div');
+        tabTL.className = CLS.tab;
+        tabTL.textContent = 'Timeline';
+        tabs.append(tabChars, tabTL);
+
+        const manual = document.createElement('div');
+        manual.className = CLS.manualBox;
+        const input = document.createElement('input');
+        input.placeholder = 'Add a character name…';
+        const addBtn = document.createElement('button');
+        addBtn.className = CLS.btn;
+        addBtn.textContent = 'Add';
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') addBtn.click();
+        });
+        addBtn.addEventListener('click', () => {
+            const v = input.value.trim();
+            if (!v) return;
+            upsertName(v, 'major');
+            input.value = '';
+            renderCharacters();
+            reprocessNamesDebounced();
+        });
+        manual.append(input, addBtn);
+
+        const sectionChars = document.createElement('div');
+        sectionChars.className = CLS.section;
+        const list = document.createElement('div');
+        list.className = CLS.list;
+        const minorHeader = document.createElement('div');
+        minorHeader.textContent = 'Minor Characters';
+        minorHeader.style.cssText = 'font-size:12px;opacity:.8';
+        const listMinor = document.createElement('div');
+        listMinor.className = `${CLS.list} ${CLS.listMinor}`;
+        sectionChars.append(list, minorHeader, listMinor);
+
+        const sectionTL = document.createElement('div');
+        sectionTL.className = CLS.section;
+        sectionTL.style.display = 'none';
+        const tlRoot = document.createElement('div');
+        tlRoot.className = CLS.list;
+        sectionTL.append(tlRoot);
+
+        const resizer = document.createElement('div');
+        resizer.className = CLS.resizer;
+
+        panel.append(header, tabs, manual, sectionChars, sectionTL, resizer);
+        document.body.appendChild(panel);
+
+        tabChars.addEventListener('click', () => {
+            tabChars.classList.add(CLS.tabActive);
+            tabTL.classList.remove(CLS.tabActive);
+            sectionChars.style.display = 'block';
+            sectionTL.style.display = 'none';
+        });
+        tabTL.addEventListener('click', () => {
+            tabTL.classList.add(CLS.tabActive);
+            tabChars.classList.remove(CLS.tabActive);
+            sectionChars.style.display = 'none';
+            sectionTL.style.display = 'block';
+        });
+
+        resizer.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            const startY = e.clientY;
+            const startH = panel.offsetHeight;
+
+            function onMove(ev) {
+                const nh = startH + ev.clientY - startY;
+                panel.style.height = `${nh}px`;
+            }
+
+            function onUp() {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                persist.panelHeight = panel.offsetHeight;
+                savePersist(persist);
+            }
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+
+        function makeCard(name, data, povName) {
+            const card = document.createElement('div');
+            card.className = CLS.card;
+            if (povName === name) card.classList.add('ao3sn-featured');
+
+            const img = document.createElement('img');
+            img.className = CLS.avatar;
+            img.alt = `${name} avatar`;
+            img.src = getAvatar(name, data.color);
+            const text = document.createElement('div');
+            text.className = CLS.row;
+            const nm = document.createElement('div');
+            nm.className = CLS.compactName;
+            nm.textContent = name;
+            nm.style.color = data.color;
+
+            const factsEl = document.createElement('div');
+            factsEl.style.cssText = 'font-size:12px;opacity:.8';
+            const factItems = [];
+            if (data.role) factItems.push(data.role);
+            if (data.age) factItems.push(`Age ${data.age}`);
+            if (data.gender) factItems.push(data.gender);
+            if (data.species) factItems.push(data.species);
+            factsEl.textContent = factItems.join(' • ') || '—';
+
+            const rm = document.createElement('button');
+            rm.className = CLS.iconBtn;
+            rm.textContent = '✖';
+            rm.title = 'Remove';
+            rm.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                removeName(name);
+                renderCharacters();
+                reprocessNamesDebounced();
+            });
+
+            text.append(nm, factsEl);
+            card.append(img, text, rm);
+
+            const details = document.createElement('div');
+            details.className = CLS.details;
+            details.innerHTML = renderCharacterDetailsHTML(data);
+            card.appendChild(details);
+
+            const toggle = () => {
+                details.style.display = details.style.display === 'none' || !details.style.display ? 'block' : 'none';
+            };
+            card.addEventListener('click', (e) => {
+                if (e.target === rm) return;
+                toggle();
+            });
+            nm.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggle();
+            });
+
+            return card;
+        }
+
+        function renderCharacters() {
+            list.innerHTML = '';
+            listMinor.innerHTML = '';
+            const major = [];
+            const minor = [];
+            for (const [name, d] of Object.entries(persist.characters)) (d.kind === 'major' || d.kind === 'main' ? major : minor).push([name, d]);
+
+            const pov = persist.povName && persist.characters[persist.povName] ? persist.povName : null;
+
+            if (pov && persist.characters[pov] && (persist.characters[pov].kind === 'major' || persist.characters[pov].kind === 'main')) {
+                list.appendChild(makeCard(pov, persist.characters[pov], pov));
+                for (let i = major.length - 1; i >= 0; i--) if (major[i][0] === pov) major.splice(i, 1);
+            }
+            major.forEach(([n, d]) => list.appendChild(makeCard(n, d, pov)));
+            minor.forEach(([n, d]) => listMinor.appendChild(makeCard(n, d, pov)));
+        }
+
+        function renderTimeline() {
+            tlRoot.innerHTML = '';
+            for (const day of persist.timeline) {
+                const dayEl = document.createElement('div');
+                dayEl.className = CLS.tlDay;
+                const hdr = document.createElement('div');
+                hdr.style.cssText = 'font-weight:700;font-size:13px;margin:6px 0 2px';
+                hdr.textContent = day.date || '—';
+                dayEl.appendChild(hdr);
+                for (const ev of day.events || []) {
+                    const row = document.createElement('div');
+                    row.className = CLS.tlEvent;
+                    row.style.cssText = 'border:1px solid #eee;background:#fff;border-radius:8px;padding:6px;display:grid;gap:4px';
+                    const tm = document.createElement('div');
+                    tm.className = CLS.tlTime;
+                    tm.style.cssText = 'font-size:12px;opacity:.8';
+                    tm.textContent = ev.time || '';
+                    const ds = document.createElement('div');
+                    ds.className = CLS.tlDesc;
+                    ds.textContent = ev.description || '';
+                    const chs = document.createElement('div');
+                    chs.className = CLS.tlChars;
+                    chs.style.cssText = 'font-size:12px;opacity:.9';
+                    if (Array.isArray(ev.characters_involved) && ev.characters_involved.length) chs.textContent = `With: ${ev.characters_involved.join(', ')}`;
+                    if (tm.textContent) row.appendChild(tm);
+                    row.appendChild(ds);
+                    if (chs.textContent) row.appendChild(chs);
+                    dayEl.appendChild(row);
+                }
+                tlRoot.appendChild(dayEl);
+            }
+        }
+
+        panel._renderCharacters = renderCharacters;
+        panel._renderTimeline = renderTimeline;
+
+        renderCharacters();
+        renderTimeline();
+        return panel;
+    }
+
+    /** ---------------------------------------
+     * Main Orchestration
+     * ------------------------------------- */
+
     const persist = loadPersist();
     savePersistSafe(persist);
     persist.characters = persist.characters || {};
     persist.pronouns = persist.pronouns || {};
     persist.timeline = persist.timeline || [];
+
+    // Pronoun setup (stable colors)
     for (const p of ['he', 'she', 'they']) {
         const k = p.toLowerCase();
         if (!persist.pronouns[k]) persist.pronouns[k] = { color: nameToColor(k) };
     }
 
-    // normalize any legacy alias-keys
     normalizeCharactersStore();
 
-    const targets = [];
-    for (const sel of STORY_SELECTORS) document.querySelectorAll(sel).forEach(n => targets.push(n));
+    function upsertName(name, kind = 'major') {
+        const trimmed = name.trim();
+        if (!trimmed) return;
+        if (!persist.characters[trimmed]) {
+            const color = nameToColor(trimmed);
+            persist.characters[trimmed] = { color, name: trimmed, kind, mentions: 0, aliases: [] };
+            rebuildAliasIndex();
+        } else {
+            persist.characters[trimmed].kind = kind;
+        }
+        scheduleSave();
+    }
 
+    function removeName(name) {
+        delete persist.characters[name];
+        rebuildAliasIndex();
+        savePersist(persist);
+    }
+
+    const panel = buildPanel();
+    const renderCharacters = () => panel._renderCharacters && panel._renderCharacters();
+    const renderTimeline = () => panel._renderTimeline && panel._renderTimeline();
+
+    /** Merge one CharacterData into persist and return true if a new visible name appeared. */
     function mergeCharacterIntoPersist(ch) {
         const incomingName = (ch.name || '').trim();
         if (!incomingName) return false;
@@ -886,12 +1301,11 @@
         return changed;
     }
 
-    /** ---------------------------------------
-     * Highlight pass
-     * ------------------------------------- */
+    /** Build regexes and process name wrapping across the page, then pronouns. */
     function reprocessNames() {
         const nameRegex = buildNameRegexExact(computeNameSet());
         const pronounRegex = buildPronounRegex(Object.keys(persist.pronouns));
+        const targets = adapter.findWrapTargets();
         const wrapQueue = [];
         targets.forEach(root => {
             for (const tn of textNodeWalker(root)) wrapQueue.push(tn);
@@ -907,9 +1321,9 @@
                 }
                 await new Promise(res => ric(res));
             }
-            // Pronouns after names
+            // Pronouns pass after names
             const pronounNodes = [];
-            for (const sel of STORY_SELECTORS) document.querySelectorAll(sel).forEach(root => {
+            adapter.findWrapTargets().forEach(root => {
                 for (const tn of textNodeWalker(root)) pronounNodes.push(tn);
             });
             for (const tn of pronounNodes) {
@@ -917,14 +1331,16 @@
                 wrapMatchesInTextNode(tn, pronounRegex, makePronounSpan);
             }
 
-            // Auto classify by mentions
+            // Classify characters by mention count
             for (const [name, data] of Object.entries(persist.characters)) {
                 if ((data.mentions || 0) >= MIN_MAJOR_MENTIONS) data.kind = 'major';
                 else if ((data.mentions || 0) >= MIN_MINOR_MENTIONS) data.kind = 'minor';
             }
 
-            // POV gradient
-            if (!persist.povName) persist.povName = determinePOVName(persist);
+            // Apply POV gradient
+            if (!persist.povName) {
+                persist.povName = determinePOVName(persist);
+            }
             if (persist.povName && persist.characters[persist.povName]) {
                 const base = persist.characters[persist.povName].color;
                 const { c1, c2 } = povGradientFrom(base);
@@ -940,6 +1356,7 @@
 
     const reprocessNamesDebounced = debounce(reprocessNames, 150);
 
+    /** Creates a wrapped element for a detected character name. */
     function makeNameSpan(txt) {
         const original = txt;
         const canon = persist.characters[original] ? original : (aliasIndex[original] || null);
@@ -953,21 +1370,22 @@
         span.dataset.name = canon;
         span.style.color = data.color;
         span.textContent = original;
-
         const dot = makeInfoDot(data.color);
         dot.addEventListener('mouseenter', () => {
             showTooltip(dot, renderCharacterDetailsHTML(data));
         });
         dot.addEventListener('mouseleave', () => hideTooltip(dot));
-
         const wrapper = document.createElement('span');
         wrapper.className = 'ao3sn-wrap';
         wrapper.appendChild(dot);
         wrapper.appendChild(span);
-        if (persist.povName && persist.povName === canon) span.setAttribute('data-main', '1');
+        if (persist.povName && persist.povName === canon) {
+            span.setAttribute('data-main', '1');
+        }
         return wrapper;
     }
 
+    /** Creates a wrapped element for a pronoun token. */
     function makePronounSpan(txt) {
         const k = txt.toLowerCase();
         const color = (persist.pronouns[k] && persist.pronouns[k].color) || nameToColor(k);
@@ -979,290 +1397,10 @@
         return span;
     }
 
-    /** ---------------------------------------
-     * Side Panel (Characters & Timeline tabs)
-     * ------------------------------------- */
-    const throbber = document.createElement('div');
-    throbber.className = CLS.throbber;
-    throbber.textContent = 'Analyzing story';
-    document.body.appendChild(throbber);
-
-    function setThrobber(on) {
-        throbber.style.display = on ? 'block' : 'none';
-    }
-
-    let inflight = 0;
-    const inc = () => {
-        inflight++;
-        setThrobber(true);
-    };
-    const dec = () => {
-        inflight = Math.max(0, inflight - 1);
-        if (!inflight) setThrobber(false);
-    };
-
-    function buildPanel() {
-        const panel = document.createElement('aside');
-        panel.className = CLS.panel + (persist.pinnedPanel ? ` ${CLS.panelPinned}` : '');
-        panel.style.height = `${persist.panelHeight}px`;
-        panel.setAttribute('aria-label', 'Paige panel');
-
-        const header = document.createElement('div');
-        header.className = CLS.panelHeader;
-        const pin = document.createElement('button');
-        pin.className = CLS.iconBtn;
-        pin.textContent = persist.pinnedPanel ? '📌 Shelve' : '📌 Unshelve';
-        pin.addEventListener('click', () => {
-            persist.pinnedPanel = !persist.pinnedPanel;
-            savePersist(persist);
-            panel.classList.toggle(CLS.panelPinned);
-            pin.textContent = panel.classList.contains(CLS.panelPinned) ? '📌 Shelve' : '📌 Unshelve';
-        });
-        const compact = document.createElement('button');
-        compact.className = CLS.iconBtn;
-        compact.textContent = '🗂️ Compact';
-        compact.addEventListener('click', () => {
-            panel.classList.toggle(CLS.panelCollapsed);
-        });
-        const title = document.createElement('div');
-        title.style.fontWeight = '700';
-        title.textContent = 'Paige';
-        header.append(pin, compact, title);
-
-        const tabs = document.createElement('div');
-        tabs.className = CLS.tabs;
-        const tabChars = document.createElement('div');
-        tabChars.className = `${CLS.tab} ${CLS.tabActive}`;
-        tabChars.textContent = 'Characters';
-        const tabTL = document.createElement('div');
-        tabTL.className = CLS.tab;
-        tabTL.textContent = 'Timeline';
-        tabs.append(tabChars, tabTL);
-
-        const manual = document.createElement('div');
-        manual.className = CLS.manualBox;
-        const input = document.createElement('input');
-        input.placeholder = 'Add a character name…';
-        const addBtn = document.createElement('button');
-        addBtn.className = CLS.btn;
-        addBtn.textContent = 'Add';
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') addBtn.click();
-        });
-        addBtn.addEventListener('click', () => {
-            const v = input.value.trim();
-            if (!v) return;
-            upsertName(v, 'major');
-            input.value = '';
-            renderCharacters();
-            reprocessNamesDebounced();
-        });
-        manual.append(input, addBtn);
-
-        const sectionChars = document.createElement('div');
-        sectionChars.className = CLS.section;
-        const list = document.createElement('div');
-        list.className = CLS.list;
-        const minorHeader = document.createElement('div');
-        minorHeader.textContent = 'Minor Characters';
-        minorHeader.style.cssText = 'font-size:12px;opacity:.8';
-        const listMinor = document.createElement('div');
-        listMinor.className = `${CLS.list} ${CLS.listMinor}`;
-        sectionChars.append(list, minorHeader, listMinor);
-
-        const sectionTL = document.createElement('div');
-        sectionTL.className = CLS.section;
-        sectionTL.style.display = 'none';
-        const tlRoot = document.createElement('div');
-        tlRoot.className = CLS.list;
-        sectionTL.append(tlRoot);
-
-        const resizer = document.createElement('div');
-        resizer.className = CLS.resizer;
-
-        panel.append(header, tabs, manual, sectionChars, sectionTL, resizer);
-        document.body.appendChild(panel);
-
-        tabChars.addEventListener('click', () => {
-            tabChars.classList.add(CLS.tabActive);
-            tabTL.classList.remove(CLS.tabActive);
-            sectionChars.style.display = 'block';
-            sectionTL.style.display = 'none';
-        });
-        tabTL.addEventListener('click', () => {
-            tabTL.classList.add(CLS.tabActive);
-            tabChars.classList.remove(CLS.tabActive);
-            sectionChars.style.display = 'none';
-            sectionTL.style.display = 'block';
-        });
-
-        resizer.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            const startY = e.clientY;
-            const startH = panel.offsetHeight;
-
-            function onMove(ev) {
-                const nh = startH + ev.clientY - startY;
-                panel.style.height = `${nh}px`;
-            }
-
-            function onUp() {
-                document.removeEventListener('mousemove', onMove);
-                document.removeEventListener('mouseup', onUp);
-                persist.panelHeight = panel.offsetHeight;
-                savePersist(persist);
-            }
-
-            document.addEventListener('mousemove', onMove);
-            document.addEventListener('mouseup', onUp);
-        });
-
-        function renderCharacters() {
-            list.innerHTML = '';
-            listMinor.innerHTML = '';
-            const major = [];
-            const minor = [];
-            for (const [name, d] of Object.entries(persist.characters)) (d.kind === 'major' || d.kind === 'main' ? major : minor).push([name, d]);
-
-            const pov = persist.povName && persist.characters[persist.povName] ? persist.povName : null;
-
-            const makeCard = (name, data) => {
-                const card = document.createElement('div');
-                card.className = CLS.card;
-                if (pov === name) card.classList.add('ao3sn-featured');
-
-                const img = document.createElement('img');
-                img.className = CLS.avatar;
-                img.alt = `${name} avatar`;
-                img.src = getAvatar(name, data.color);
-                const text = document.createElement('div');
-                text.className = CLS.row;
-                const nm = document.createElement('div');
-                nm.className = CLS.compactName;
-                nm.textContent = name;
-                nm.style.color = data.color;
-
-                const factsEl = document.createElement('div');
-                factsEl.style.cssText = 'font-size:12px;opacity:.8';
-                const factItems = [];
-                if (data.role) factItems.push(data.role);
-                if (data.age) factItems.push(`Age ${data.age}`);
-                if (data.gender) factItems.push(data.gender);
-                if (data.species) factItems.push(data.species);
-                factsEl.textContent = factItems.join(' • ') || '—';
-
-                const rm = document.createElement('button');
-                rm.className = CLS.iconBtn;
-                rm.textContent = '✖';
-                rm.title = 'Remove';
-                rm.addEventListener('click', (ev) => {
-                    ev.stopPropagation();
-                    removeName(name);
-                    renderCharacters();
-                    reprocessNamesDebounced();
-                });
-
-                text.append(nm, factsEl);
-                card.append(img, text, rm);
-
-                const details = document.createElement('div');
-                details.className = CLS.details;
-                details.innerHTML = renderCharacterDetailsHTML(data);
-                card.appendChild(details);
-
-                const toggle = () => {
-                    details.style.display = details.style.display === 'none' || !details.style.display ? 'block' : 'none';
-                };
-                card.addEventListener('click', (e) => {
-                    if (e.target === rm) return;
-                    toggle();
-                });
-                nm.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    toggle();
-                });
-
-                return card;
-            };
-
-            if (pov && persist.characters[pov] && (persist.characters[pov].kind === 'major' || persist.characters[pov].kind === 'main')) {
-                list.appendChild(makeCard(pov, persist.characters[pov]));
-                for (let i = major.length - 1; i >= 0; i--) if (major[i][0] === pov) major.splice(i, 1);
-            }
-            major.forEach(([n, d]) => list.appendChild(makeCard(n, d)));
-            minor.forEach(([n, d]) => listMinor.appendChild(makeCard(n, d)));
-        }
-
-        function renderTimeline() {
-            const tlRoot = sectionTL.firstChild;
-            tlRoot.innerHTML = '';
-            for (const day of persist.timeline) {
-                const dayEl = document.createElement('div');
-                dayEl.className = CLS.tlDay;
-                const hdr = document.createElement('div');
-                hdr.style.cssText = 'font-weight:700;font-size:13px;margin:6px 0 2px';
-                hdr.textContent = day.date || '—';
-                dayEl.appendChild(hdr);
-                for (const ev of day.events || []) {
-                    const row = document.createElement('div');
-                    row.className = CLS.tlEvent;
-                    row.style.cssText = 'border:1px solid #eee;background:#fff;border-radius:8px;padding:6px;display:grid;gap:4px';
-                    const tm = document.createElement('div');
-                    tm.className = CLS.tlTime;
-                    tm.style.cssText = 'font-size:12px;opacity:.8';
-                    tm.textContent = ev.time || '';
-                    const ds = document.createElement('div');
-                    ds.className = CLS.tlDesc;
-                    ds.textContent = ev.description || '';
-                    const chs = document.createElement('div');
-                    chs.className = CLS.tlChars;
-                    chs.style.cssText = 'font-size:12px;opacity:.9';
-                    if (Array.isArray(ev.characters_involved) && ev.characters_involved.length) chs.textContent = `With: ${ev.characters_involved.join(', ')}`;
-                    if (tm.textContent) row.appendChild(tm);
-                    row.appendChild(ds);
-                    if (chs.textContent) row.appendChild(chs);
-                    dayEl.appendChild(row);
-                }
-                tlRoot.appendChild(dayEl);
-            }
-        }
-
-        panel._renderCharacters = renderCharacters;
-        panel._renderTimeline = renderTimeline;
-
-        renderCharacters();
-        renderTimeline();
-        return panel;
-    }
-
-    function upsertName(name, kind = 'major') {
-        const trimmed = name.trim();
-        if (!trimmed) return;
-        if (!persist.characters[trimmed]) {
-            const color = nameToColor(trimmed);
-            persist.characters[trimmed] = { color, name: trimmed, kind, mentions: 0, aliases: [] };
-            rebuildAliasIndex();
-        } else {
-            persist.characters[trimmed].kind = kind;
-        }
-        scheduleSave();
-    }
-
-    function removeName(name) {
-        delete persist.characters[name];
-        rebuildAliasIndex();
-        savePersist(persist);
-    }
-
-    const panel = buildPanel();
-    const renderCharacters = () => panel._renderCharacters && panel._renderCharacters();
-    const renderTimeline = () => panel._renderTimeline && panel._renderTimeline();
-
-    /** ---------------------------------------
-     * Initial pass + SSE stream
-     * ------------------------------------- */
+    // Initial pass
     reprocessNames();
 
+    // Animate when names come into view
     const ioNames = new IntersectionObserver(entries => {
         for (const e of entries) {
             const el = e.target;
@@ -1272,15 +1410,28 @@
             }
         }
     }, { rootMargin: '0px 0px -10% 0px', threshold: 0.1 });
-    document.querySelectorAll(`.${CLS.name}`).forEach(el => ioNames.observe(el));
+    document.querySelectorAll(`.${CLS.name}`).forEach(span => {
+        const el = span.matches(`.${CLS.name}`) ? span : span.querySelector(`.${CLS.name}`);
+        if (el) ioNames.observe(el);
+    });
 
+    // Observe new content (placeholder hook)
+    const mo = new MutationObserver(debounce(() => { /* dynamic content hook */
+    }, 500));
+    mo.observe(document.body, { childList: true, subtree: true });
+
+    // Streaming logic (site-specific)
     (async function run() {
-        const { id, chapter } = parseWorkAndChapterID();
+        const { id, chapter } = adapter.parseWorkAndChapterID();
 
         const integratePartial = (partial) => {
             let changed = false;
-            if (partial && Array.isArray(partial.characters)) for (const ch of partial.characters) changed = mergeCharacterIntoPersist(ch) || changed;
-            if (partial && Array.isArray(partial.timeline)) changed = mergeTimeline(partial.timeline) || changed;
+            if (partial && Array.isArray(partial.characters)) {
+                for (const ch of partial.characters) changed = mergeCharacterIntoPersist(ch) || changed;
+            }
+            if (partial && Array.isArray(partial.timeline)) {
+                changed = mergeTimeline(partial.timeline) || changed;
+            }
             if (changed) {
                 normalizeCharactersStore();
                 savePersist(persist);
@@ -1291,73 +1442,51 @@
         };
 
         try {
-            if (isViewFullWork()) {
-                // Robust full-work: observe per-article; resolve chapterId from container or links
-                const chapters = collectChapterArticles();
-
+            if (adapter.isFullWork()) {
+                // AO3 full-work path
+                const chapters = adapter.collectChapters();
                 if (!chapters.length) {
-                    // Fallback: if AO3 markup differs, at least process the whole page once
+                    // Fallback: summarize entire page text
                     inc();
-                    await streamSummarize({
-                        text: collectStoryText(),
-                        id,
-                        chapter: ''
-                    }, integratePartial).finally(() => dec());
+                    await streamSummarize({ text: adapter.collectSingleText(), id, chapter: '', source: adapter.source }, integratePartial).finally(() => dec());
                 } else {
                     const seen = new WeakSet();
                     const processing = new WeakSet();
-
                     const obs = new IntersectionObserver((entries) => {
                         entries.forEach((entry) => {
                             const article = entry.target;
                             if (!entry.isIntersecting) return;
                             if (seen.has(article) || processing.has(article)) return;
-
                             const node = chapters.find(c => c.article === article);
                             if (!node) return;
-
                             processing.add(article);
                             inc();
-                            // chapterId may be '' if AO3 didn’t expose it; that’s fine — backend will still work
-                            streamSummarize({ text: node.text, id, chapter: node.chapterId || '' }, integratePartial)
-                                .catch(err => console.warn('[AO3SN] chapter stream failed:', err))
+                            streamSummarize({ text: node.text, id, chapter: node.chapterId || '', source: adapter.source }, integratePartial)
+                                .catch(err => console.warn('[Paige] chapter stream failed:', err))
                                 .finally(() => {
                                     dec();
                                     processing.delete(article);
                                     seen.add(article);
                                 });
                         });
-                    }, { threshold: 0.05, rootMargin: '800px 0px 800px 0px' }); // big margins to prefetch early
-
+                    }, { threshold: 0.05, rootMargin: '800px 0px 800px 0px' });
                     chapters.forEach(({ article }) => obs.observe(article));
                 }
             } else {
-                // Single-chapter or single-work page: no /chapters/:id in URL → send chapter: ""
+                // Single text block (AO3 single chapter or Inkbunny page)
                 inc();
-                await streamSummarize({ text: collectStoryText(), id, chapter }, integratePartial)
+                await streamSummarize({ text: adapter.collectSingleText(), id, chapter, source: adapter.source }, integratePartial)
                     .catch(err => {
-                        console.error('[AO3SN] summarize failed:', err);
-                        const e = document.createElement('div');
-                        e.style.cssText = 'position:fixed;bottom:20px;right:20px;background:crimson;color:#fff;padding:8px 12px;border-radius:8px;z-index:9999;';
-                        e.textContent = 'AO3 Smart Names: summarize failed';
-                        document.body.appendChild(e);
-                        setTimeout(() => e.remove(), 5000);
+                        console.error('[Paige] summarize failed:', err);
+                        const e = document.createElement('div'); e.style.cssText = 'position:fixed;bottom:20px;right:20px;background:crimson;color:#fff;padding:8px 12px;border-radius:8px;z-index:9999;'; e.textContent = 'Paige: summarize failed'; document.body.appendChild(e); setTimeout(() => e.remove(), 5000);
                     })
                     .finally(() => dec());
             }
         } catch (err) {
-            console.error('[AO3SN] summarize error:', err);
-            const e = document.createElement('div');
-            e.style.cssText = 'position:fixed;bottom:20px;right:20px;background:crimson;color:#fff;padding:8px 12px;border-radius:8px;z-index:9999;';
-            e.textContent = 'AO3 Smart Names: summarize failed';
-            document.body.appendChild(e);
-            setTimeout(() => e.remove(), 5000);
+            console.error('[Paige] summarize error:', err);
+            const e = document.createElement('div'); e.style.cssText = 'position:fixed;bottom:20px;right:20px;background:crimson;color:#fff;padding:8px 12px;border-radius:8px;z-index:9999;'; e.textContent = 'Paige: summarize failed'; document.body.appendChild(e); setTimeout(() => e.remove(), 5000);
             dec();
         }
     })();
-
-    const mo = new MutationObserver(debounce(() => { /* dynamic content hook */
-    }, 500));
-    mo.observe(document.body, { childList: true, subtree: true });
 
 })();
