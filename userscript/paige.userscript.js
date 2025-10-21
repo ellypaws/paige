@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AO3 Smart Name Highlighter + Pronoun Colorizer (SSE, Timeline, Aliases)
 // @namespace    ao3-smart-names
-// @version      1.6.2
+// @version      1.6.3
 // @description  Highlight names & pronouns on AO3. Streams /api/summarize (SSE), updates on EVERY event, canonical alias merging, side panel + timeline, and smart tooltip truncation of notable actions only.
 // @author       you
 // @match        https://archiveofourown.org/works/*
@@ -246,6 +246,8 @@
     }
 
     function parseWorkAndChapterID() {
+        // /works/:id              -> {id, chapter: ""}
+        // /works/:id/chapters/:c  -> {id, chapter}
         const m = location.pathname.match(/\/works\/(\d+)(?:\/chapters\/(\d+))?/);
         return { id: m?.[1] || "", chapter: m?.[2] || "" };
     }
@@ -254,18 +256,59 @@
         return new URLSearchParams(window.location.search).get("view_full_work") === "true";
     }
 
-    function collectChapters() {
-        const chapters = [];
-        document.querySelectorAll("div.chapter[id^='chapter-']").forEach(ch => {
-            const article = ch.querySelector("div.userstuff.module[role='article']");
+    /**
+     * Return an array of per-chapter targets for full-work pages.
+     * Observes the actual ARTICLE node for reliability; resolves chapterId from
+     * container id (#chapter-123) OR any internal /chapters/:id link if needed.
+     * @returns {{article: Element, chapterId: string, text: string}[]}
+     */
+    function collectChapterArticles() {
+        /** Try the common structure: <div class="chapter" id="chapter-123"><div class="userstuff module" role="article">… */
+        const out = [];
+        document.querySelectorAll("div.chapter").forEach(ch => {
+            const article =
+                ch.querySelector('div.userstuff.module[role="article"]') ||
+                ch.querySelector('[role="article"].userstuff') ||
+                ch.querySelector('.userstuff');
+
             if (!article) return;
+
+            // Chapter id resolution:
+            let chapterId = '';
+            const idMatch = (ch.id || '').match(/^chapter-(\d+)/);
+            if (idMatch) chapterId = idMatch[1];
+            if (!chapterId) {
+                // Fallback: find any link that references /chapters/:id
+                const link = ch.querySelector('a[href*="/chapters/"]');
+                const lm = link && link.getAttribute('href').match(/\/chapters\/(\d+)/);
+                if (lm) chapterId = lm[1];
+            }
+
+            // Extract readable text
             const clone = article.cloneNode(true);
-            const h3 = clone.querySelector("h3#work.landmark.heading");
-            if (h3) h3.remove();
-            const text = clone.innerText.trim();
-            if (text) chapters.push({ el: ch, text });
+            const stray = clone.querySelector("h3#work.landmark.heading");
+            if (stray) stray.remove();
+            const text = (clone.innerText || '').trim();
+            if (!text) return;
+
+            out.push({ article, chapterId, text });
         });
-        return chapters;
+        return out;
+    }
+
+    function collectStoryText() {
+        const nodes = [];
+        for (const sel of STORY_SELECTORS) document.querySelectorAll(sel).forEach(n => nodes.push(n));
+        const excluded = new Set();
+        EXCLUDE_SELECTORS.forEach(sel => {
+            document.querySelectorAll(sel).forEach(n => excluded.add(n));
+        });
+        const chunks = [];
+        nodes.forEach(root => {
+            if ([...excluded].some(ex => ex.contains(root) || root.contains(ex))) return;
+            chunks.push(root.innerText);
+        });
+        return chunks.join('\n\n').trim();
     }
 
     function hslWithAlpha(hsl, a = 0.18) {
@@ -520,23 +563,8 @@
     }
 
     /** ---------------------------------------
-     * DOM Helpers
+     * Wrapping / Highlight
      * ------------------------------------- */
-    function collectStoryText() {
-        const nodes = [];
-        for (const sel of STORY_SELECTORS) document.querySelectorAll(sel).forEach(n => nodes.push(n));
-        const excluded = new Set();
-        EXCLUDE_SELECTORS.forEach(sel => {
-            document.querySelectorAll(sel).forEach(n => excluded.add(n));
-        });
-        const chunks = [];
-        nodes.forEach(root => {
-            if ([...excluded].some(ex => ex.contains(root) || root.contains(ex))) return;
-            chunks.push(root.innerText);
-        });
-        return chunks.join('\n\n').trim();
-    }
-
     function* textNodeWalker(root) {
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
             acceptNode(node) {
@@ -627,9 +655,7 @@
         });
     }
 
-    /** ---------------------------------------
-     * Tooltip content / info (truncate notable actions only)
-     * ------------------------------------- */
+    /** Tooltip render (truncate only notable_actions) */
     function getMaxActionsForScreen() {
         const h = window.innerHeight, w = window.innerWidth;
         if (h < 700 || w < 900) return 4;
@@ -637,11 +663,20 @@
         return 10;
     }
 
+    function escapeHTML(s) {
+        return String(s || '').replace(/[&<>"']/g, c => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        }[c]));
+    }
+
     function renderCharacterDetailsHTML(d) {
         const aliasChips = (d.aliases || []).map(a => `<span class="${CLS.chip}">${escapeHTML(a)}</span>`).join(' ');
         const pd = d.physical_description || {};
         const sc = d.sexual_characteristics || {};
-
         const linesTop = [];
         if (d.role) linesTop.push(`<div class="${CLS.field}"><b>Role:</b> ${escapeHTML(d.role)}</div>`);
         if (d.personality) linesTop.push(`<div class="${CLS.field}"><b>Personality:</b> ${escapeHTML(d.personality)}</div>`);
@@ -652,14 +687,12 @@
         <div class="${CLS.field}"><b>Species:</b> ${escapeHTML(d.species || '—')}</div>
         <div class="${CLS.field}"><b>Kind:</b> ${escapeHTML(d.kind || '—')}</div>
       </div>`;
-
         const phys = [
             pd.height && `<div class="${CLS.field}">• Height: ${escapeHTML(pd.height)}</div>`,
             pd.build && `<div class="${CLS.field}">• Build: ${escapeHTML(pd.build)}</div>`,
             pd.hair && `<div class="${CLS.field}">• Hair: ${escapeHTML(pd.hair)}</div>`,
             pd.other && `<div class="${CLS.field}">• Other: ${escapeHTML(pd.other)}</div>`,
         ].filter(Boolean).join('');
-
         const sex = [
             sc.genitalia && `<div class="${CLS.field}">• Genitalia: ${escapeHTML(sc.genitalia)}</div>`,
             sc.penis_length_flaccid && `<div class="${CLS.field}">• Penis (flaccid): ${escapeHTML(sc.penis_length_flaccid)}</div>`,
@@ -687,16 +720,6 @@
       ${sex ? `<div class="${CLS.field}" style="margin-top:6px"><b>Sexual</b>${sex}</div> ` : ''}
       ${actsArr.length ? `<div class="${CLS.field}" style="margin-top:6px"><b>Notable actions</b>${actsList}</div>` : ''}
     `;
-    }
-
-    function escapeHTML(s) {
-        return String(s || '').replace(/[&<>"']/g, c => ({
-            '&': '&amp;',
-            '<': '&lt;',
-            '>': '&gt;',
-            '"': '&quot;',
-            "'": '&#39;'
-        }[c]));
     }
 
     function makeInfoDot(color) {
@@ -762,6 +785,7 @@
         if (!persist.pronouns[k]) persist.pronouns[k] = { color: nameToColor(k) };
     }
 
+    // normalize any legacy alias-keys
     normalizeCharactersStore();
 
     const targets = [];
@@ -1170,6 +1194,7 @@
         }
 
         function renderTimeline() {
+            const tlRoot = sectionTL.firstChild;
             tlRoot.innerHTML = '';
             for (const day of persist.timeline) {
                 const dayEl = document.createElement('div');
@@ -1254,14 +1279,10 @@
 
         const integratePartial = (partial) => {
             let changed = false;
-            if (partial && Array.isArray(partial.characters)) {
-                for (const ch of partial.characters) changed = mergeCharacterIntoPersist(ch) || changed;
-            }
-            if (partial && Array.isArray(partial.timeline)) {
-                changed = mergeTimeline(partial.timeline) || changed;
-            }
+            if (partial && Array.isArray(partial.characters)) for (const ch of partial.characters) changed = mergeCharacterIntoPersist(ch) || changed;
+            if (partial && Array.isArray(partial.timeline)) changed = mergeTimeline(partial.timeline) || changed;
             if (changed) {
-                normalizeCharactersStore(); // guard if server emitted alias-as-name
+                normalizeCharactersStore();
                 savePersist(persist);
                 renderCharacters();
                 renderTimeline();
@@ -1271,36 +1292,47 @@
 
         try {
             if (isViewFullWork()) {
-                // Process chapters as they scroll into view (concurrently)
-                const chapters = collectChapters();
-                const seen = new WeakSet();
-                const processing = new WeakSet();
+                // Robust full-work: observe per-article; resolve chapterId from container or links
+                const chapters = collectChapterArticles();
 
-                const obs = new IntersectionObserver((entries) => {
-                    entries.forEach((entry) => {
-                        const el = entry.target;
-                        if (!entry.isIntersecting) return;
-                        if (seen.has(el) || processing.has(el)) return;
-                        const chap = chapters.find(c => c.el === el);
-                        if (!chap) return;
+                if (!chapters.length) {
+                    // Fallback: if AO3 markup differs, at least process the whole page once
+                    inc();
+                    await streamSummarize({
+                        text: collectStoryText(),
+                        id,
+                        chapter: ''
+                    }, integratePartial).finally(() => dec());
+                } else {
+                    const seen = new WeakSet();
+                    const processing = new WeakSet();
 
-                        processing.add(el);
-                        inc();
-                        const chapterId = (el.id || '').replace('chapter-', ''); // numeric id like 78094559
-                        // fire-and-forget; let multiple chapters stream concurrently
-                        streamSummarize({ text: chap.text, id, chapter: chapterId }, integratePartial)
-                            .catch(err => console.warn('[AO3SN] chapter stream failed:', err))
-                            .finally(() => {
-                                dec();
-                                processing.delete(el);
-                                seen.add(el);
-                            });
-                    });
-                }, { threshold: 0.05, rootMargin: '200px 0px 200px 0px' }); // trigger early on approach
+                    const obs = new IntersectionObserver((entries) => {
+                        entries.forEach((entry) => {
+                            const article = entry.target;
+                            if (!entry.isIntersecting) return;
+                            if (seen.has(article) || processing.has(article)) return;
 
-                chapters.forEach(({ el }) => obs.observe(el));
+                            const node = chapters.find(c => c.article === article);
+                            if (!node) return;
+
+                            processing.add(article);
+                            inc();
+                            // chapterId may be '' if AO3 didn’t expose it; that’s fine — backend will still work
+                            streamSummarize({ text: node.text, id, chapter: node.chapterId || '' }, integratePartial)
+                                .catch(err => console.warn('[AO3SN] chapter stream failed:', err))
+                                .finally(() => {
+                                    dec();
+                                    processing.delete(article);
+                                    seen.add(article);
+                                });
+                        });
+                    }, { threshold: 0.05, rootMargin: '800px 0px 800px 0px' }); // big margins to prefetch early
+
+                    chapters.forEach(({ article }) => obs.observe(article));
+                }
             } else {
-                // Single chapter page: send the chapter id from URL if present
+                // Single-chapter or single-work page: no /chapters/:id in URL → send chapter: ""
                 inc();
                 await streamSummarize({ text: collectStoryText(), id, chapter }, integratePartial)
                     .catch(err => {
