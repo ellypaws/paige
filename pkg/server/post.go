@@ -3,6 +3,7 @@ package server
 import (
 	"cmp"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -214,11 +215,16 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 			break
 		}
 
-		totalTokens := int64(len(systemPrompt) + len(chunk))
-		log.Debug("summarizing chunk", "index", i+1, "of", len(chunks), "chars", len(chunk), "tokens", totalTokens)
+		totalCharacters := int64(len(systemPrompt) + len(chunk))
+		tokenCount, err := utils.NumTokensFromMessages(systemPrompt + chunk)
+		if err != nil {
+			log.Debug("summarizing chunk", "index", fmt.Sprintf("%d/%d", i+1, len(chunks)), "chars", totalCharacters)
+		} else {
+			log.Debug("summarizing chunk", "index", fmt.Sprintf("%d/%d", i+1, len(chunks)), "chars", totalCharacters, "tokens", tokenCount, "ratio", float64(totalCharacters)/float64(tokenCount))
+		}
 
 		params := &openai.ChatCompletionNewParams{
-			MaxCompletionTokens: openai.Int(totalTokens * 2),
+			MaxCompletionTokens: openai.Int(cmp.Or(int64(tokenCount), totalCharacters) * 2),
 			ResponseFormat:      schema.StructuredOutputsResponseFormat(),
 		}
 
