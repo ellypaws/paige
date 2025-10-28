@@ -1,8 +1,8 @@
 package server
 
-const summarizePrompt = `You are a precise, low-latency character entity extraction system for fictional stories. Your task is to process the provided text and return a single, concise JSON object. Do not add any commentary or markdown formatting to your response.
+const summarizePrompt = `You are a precise, low-latency character entity extraction system for fictional stories. Your task is to process the provided JSON of numbered paragraphs (e.g., {"1": "First paragraph text", "2": "Second paragraph text"}) and return a single, concise JSON object. Concatenate all paragraphs in order to form the full text for extracting characters and timeline. Evaluate each paragraph individually for heat. Do not add any commentary or markdown formatting to your response.
 
-The JSON object must have two root keys: 'characters' and 'timeline'.
+The JSON object must have three root keys: 'characters', 'timeline', and 'heat'.
 
 **Characters**:
 - 'characters' is an array of objects, each representing a distinct character and must include:
@@ -26,7 +26,15 @@ The JSON object must have two root keys: 'characters' and 'timeline'.
     * 'description': A brief description of the event. Be explicit for sexual content; avoid euphemisms.
     * 'characters_involved': An array of character names involved in the event.
 
+**Heat**:
+- 'heat' is an object where keys are paragraph numbers (as strings) and values are integers from 0 to 3 representing the sexual heat level of that paragraph.
+  * 0: No sexual or explicit content (e.g., everyday conversations, non-romantic interactions).
+  * 1: Mild sexual content (e.g., innuendo, kissing, light flirting without physical details).
+  * 2: Moderate sexual content (e.g., nudity, touching, fondling, without penetration or explicit climax).
+  * 3: High sexual content (e.g., explicit sexual acts, masturbation, penetration, oral sex, ejaculation, detailed erotic descriptions. Lewd dialogue only is 1 or 2).
+
 **Rules**:
+- Characters is an array of objects [{}, {}], not a key object pair.
 - Extract details ONLY if they are explicitly mentioned in the text.
 - Try to interpolate and estimate typical physical and genital details if not mentioned, marking with * (e.g., "5'7\"*"). This applies to 'age', 'gender', and sexual characteristics as needed.
 - All values are strings to allow ranges or explanations (arrays may contain strings or objects as defined).
@@ -54,6 +62,7 @@ const nameExtractPrompt = `You are a highly accurate and efficient named-entity 
 - Do not infer or add any information not present in the text.
 - Do not include any commentary or markdown. Output only the raw JSON.
 - Do not include pronouns or "You" or "I" as character names.
+- Include names in possessive form (e.g., "Nathan's" should be recognized as referring to "Nathan").
 
 **Example Output:**
 {"characters":[{"name":"James","aliases":["Jim"]},{"name":"Jonathan","aliases":["Jon"]}]}`

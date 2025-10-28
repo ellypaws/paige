@@ -23,7 +23,6 @@ func NewServer(ctx context.Context, inf inference.Inferencer) *Server {
 	e.HideBanner = true
 	e.HidePort = true
 
-	e.Use(middleware.Recover())
 	e.Use(middleware.Logger())
 	e.Use(middleware.CORS())
 
@@ -57,7 +56,14 @@ func (s *Server) Start(addr string) error {
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	utils.Logf("Shutting down server...")
-	return s.Echo.Shutdown(ctx)
+
+	saveErr := utils.Save("CharacterSummary.json", s.Summary)
+	shutDownErr := s.Echo.Shutdown(ctx)
+	if shutDownErr != nil {
+		return shutDownErr
+	}
+
+	return saveErr
 }
 
 // handleGetRoot — defined in get.go

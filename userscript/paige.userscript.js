@@ -24,24 +24,14 @@
     const SUMMARIZE_URL = 'http://localhost:8080/api/summarize';
 
     /** Pronouns to colorize (case-insensitive word matches). */
-    const PRONOUNS = [
-        'he', 'him', 'his', 'himself',
-        'she', 'her', 'hers', 'herself',
-        'they', 'them', 'their', 'theirs', 'themself', 'themselves',
-        'xe', 'xem', 'xyr', 'xyrs', 'xemself',
-        'ze', 'zir', 'zirs', 'zirself',
-        'fae', 'faer', 'faers', 'faerself',
-        'it', 'its', 'itself'
-    ];
+    const PRONOUNS = ['he', 'him', 'his', 'himself', 'she', 'her', 'hers', 'herself', 'they', 'them', 'their', 'theirs', 'themself', 'themselves', 'xe', 'xem', 'xyr', 'xyrs', 'xemself', 'ze', 'zir', 'zirs', 'zirself', 'fae', 'faer', 'faers', 'faerself', 'it', 'its', 'itself'];
 
     /** Mentions heuristics for major/minor classification. */
     const MIN_MAJOR_MENTIONS = 6;
     const MIN_MINOR_MENTIONS = 2;
 
     /** Work-scoped key (per-site). */
-    const WORK_ID = (location.hostname.includes('archiveofourown.org')
-        ? ((location.pathname.match(/\/(works|chapters)\/(\d+)/) || []).slice(1).join(':') || location.pathname)
-        : (location.pathname + location.search || location.pathname)) || location.href;
+    const WORK_ID = (location.hostname.includes('archiveofourown.org') ? ((location.pathname.match(/\/(works|chapters)\/(\d+)/) || []).slice(1).join(':') || location.pathname) : (location.pathname + location.search || location.pathname)) || location.href;
 
     const LS_KEY = `ao3-smart-names:v1:${location.hostname}:${WORK_ID}`;
 
@@ -175,6 +165,30 @@
     .${CLS.infoDot} { margin-left: 0; margin-right: 0.15em; }
 
     .ao3sn-featured { border: 1px solid #ffd9b3; background: linear-gradient(180deg, #fffaf5, #fff); box-shadow: 0 6px 22px rgba(229,46,113,0.12); }
+/* paragraph heat wrappers */
+.ao3sn-para {
+  position: relative;
+  padding-left: 0.6em;
+  margin-left: 0.25em;
+  --ao3sn-heat: 0; /* 0..1 maps to transparency of the red bar */
+}
+.ao3sn-para::before {
+  content: "";
+  position: absolute;
+  left: -0.35em;
+  top: 0; bottom: 0;
+  width: 6px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, rgba(255,0,0,var(--ao3sn-heat)) 0%, rgba(255,0,0,0) 100%);
+}
+.ao3sn-heat {
+  position: absolute;
+  left: -1.6em;
+  top: 0;
+  font-size: 0.95em;
+  line-height: 1;
+  user-select: none;
+}
   `);
 
     /** ---------------------------------------
@@ -209,10 +223,7 @@
         collectChapters() {
             const out = [];
             document.querySelectorAll("div.chapter").forEach(ch => {
-                const article =
-                    ch.querySelector('div.userstuff.module[role="article"]') ||
-                    ch.querySelector('[role="article"].userstuff') ||
-                    ch.querySelector('.userstuff');
+                const article = ch.querySelector('div.userstuff.module[role="article"]') || ch.querySelector('[role="article"].userstuff') || ch.querySelector('.userstuff');
                 if (!article) return;
 
                 let chapterId = '';
@@ -263,30 +274,27 @@
     const InkbunnyAdapter = /** @type {SiteAdapter} */({
         id: 'inkbunny',
         source: 'inkbunny',
-        name: 'Inkbunny',
-        // Only match InkBunny when the page actually contains the expected story container
-        match: () => location.hostname.includes('inkbunny.net') && (
-            !!document.querySelector('#storysectionfoo') || !!document.querySelector('#storysectionbar')
-        ),
+        name: 'Inkbunny', // Only match InkBunny when the page actually contains the expected story container
+        match: () => location.hostname.includes('inkbunny.net') && (!!document.querySelector('#storysectionbar') || !!document.querySelector('#storysectionfoo')),
         isFullWork: () => false, // stories are single text blocks on a page
         parseWorkAndChapterID() {
             // Strictly extract InkBunny submission ID from /s/2869684
             const m = location.pathname.match(/\/s\/(\d+)/);
-            return { id: m ? m[1] : (location.pathname + location.search) || location.pathname, chapter: "" };
+            return { id: m ? m[1] : (location.pathname + location.search) || location.pathname, chapter: '' };
         },
         collectChapters() {
             return [];
         },
         collectSingleText() {
-            // Typical story container: #storysectionfoo (scroll container) or #storysectionbar inner content.
-            const el = document.querySelector('#storysectionfoo') || document.querySelector('#storysectionbar') || document.querySelector('#content') || document.body;
+            // Typical story container: #storysectionbar (inner content) or #storysectionfoo (scroll container).
+            const el = document.querySelector('#storysectionbar') || document.querySelector('#storysectionfoo') || document.querySelector('#content') || document.body;
             const clone = el.cloneNode(true);
             const text = (clone.innerText || '').replace(/\u00a0/g, ' ').trim(); // normalize &nbsp;
             return text;
         },
         findWrapTargets() {
             const targets = [];
-            const primary = document.querySelector('#storysectionfoo') || document.querySelector('#storysectionbar');
+            const primary = document.querySelector('#storysectionbar') || document.querySelector('#storysectionfoo');
             if (primary) targets.push(primary);
             // Fallback if Inkbunny theme differs
             const alt = document.querySelectorAll('#content .content, .pagestuff, #content');
@@ -306,58 +314,64 @@
      * Types (JSDoc)
      * ------------------------------------- */
     /**
-     * @typedef {Object} PhysicalDescription
-     * @property {string=} height
-     * @property {string=} build
-     * @property {string=} hair
-     * @property {string=} other
+     * @typedef {{
+     *   height: string=,
+     *   build: string=,
+     *   hair: string=,
+     *   other: string=
+     * }} PhysicalDescription
      */
 
     /**
-     * @typedef {Object} SexualCharacteristics
-     * @property {string=} genitalia
-     * @property {string=} penis_length_flaccid
-     * @property {string=} penis_length_erect
-     * @property {string=} pubic_hair
-     * @property {string=} other
+     * @typedef {{
+     *   genitalia: string=,
+     *   penis_length_flaccid: string=,
+     *   penis_length_erect: string=,
+     *   pubic_hair: string=,
+     *   other: string=
+     * }} SexualCharacteristics
      */
 
     /**
-     * @typedef {Object} CharacterData
-     * @property {string} name
-     * @property {string=} age
-     * @property {string=} gender
-     * @property {string[]=} aliases
-     * @property {'main'|'major'|'minor'} [kind]
-     * @property {string=} role
-     * @property {string=} species
-     * @property {string=} personality
-     * @property {PhysicalDescription=} physical_description
-     * @property {SexualCharacteristics=} sexual_characteristics
-     * @property {string[]=} notable_actions
+     * @typedef {{
+     *   name: string,
+     *   age: string=,
+     *   gender: string=,
+     *   aliases: string[]=,
+     *   kind: 'main'|'major'|'minor'=,
+     *   role: string=,
+     *   species: string=,
+     *   personality: string=,
+     *   physical_description: PhysicalDescription=,
+     *   sexual_characteristics: SexualCharacteristics=,
+     *   notable_actions: string[]=,
+     * }} CharacterData
      */
 
     /**
-     * @typedef {Object} EventItem
-     * @property {string} time
-     * @property {string} description
-     * @property {string[]} characters_involved
+     * @typedef {{
+     *   time: string,
+     *   description: string,
+     *   characters_involved: string[]
+     * }} EventItem
      */
 
     /**
-     * @typedef {Object} TimelineDay
-     * @property {string} date
-     * @property {EventItem[]} events
+     * @typedef {{
+     *   date: string,
+     *   events: EventItem[]
+     * }} TimelineDay
      */
 
     /**
-     * @typedef {Object} Persist
-     * @property {Record<string, ({color:string, mentions:number} & CharacterData)>} characters
-     * @property {Record<string, {color:string}>} pronouns
-     * @property {TimelineDay[]} timeline
-     * @property {boolean} pinnedPanel
-     * @property {number} panelHeight
-     * @property {string|null} povName
+     * @typedef {{
+     *   characters: Record<string, ({color:string, mentions:number} & CharacterData)>,
+     *   pronouns: Record<string, {color:string}>,
+     *   timeline: TimelineDay[],
+     *   pinnedPanel: boolean,
+     *   panelHeight: number,
+     *   povName: string|null
+     * }} Persist
      */
 
     /** ---------------------------------------
@@ -407,6 +421,109 @@
     const ric = window.requestIdleCallback || function (cb) {
         return setTimeout(() => cb({ timeRemaining: () => 16 }), 1);
     };
+
+    /** Ensure a paragraph element is wrapped for heat styling and labeled with a section key. */
+    function ensureParaWrapper(p, key) {
+        const existing = p.closest('.ao3sn-para');
+        if (existing) {
+            if (!existing.dataset.sectionKey) existing.dataset.sectionKey = key;
+            return existing;
+        }
+        const wrap = document.createElement('div');
+        wrap.className = 'ao3sn-para';
+        wrap.dataset.sectionKey = key;
+
+        const badge = document.createElement('span');
+        badge.className = 'ao3sn-heat';
+        badge.textContent = '';
+        wrap.appendChild(badge);
+
+        p.parentNode.insertBefore(wrap, p);
+        wrap.appendChild(p);
+        return wrap;
+    }
+
+    /** Map 0..3 into alpha + emojis, then paint a section container. */
+    function setParagraphHeat(container, level) {
+        const n = Math.max(0, Math.min(3, (level | 0)));
+        const alpha = n === 0 ? 0 : n === 1 ? 0.25 : n === 2 ? 0.55 : 0.85;
+        container.style.setProperty('--ao3sn-heat', String(alpha));
+        const badge = container.querySelector('.ao3sn-heat');
+        if (badge) badge.innerHTML = n ? '🔥<br>'.repeat(n) : '';
+    }
+
+    /** Extract numbered paragraphs from a given article/root node. Returns { map, dom }. */
+    function collectParagraphsFromRoot(root) {
+        const map = {};
+        const dom = {};
+        let idx = 1;
+
+        if (adapter.id === 'inkbunny' && root.querySelector('br')) {
+            const content = root.innerHTML.split(/<br\s*\/?>\s*<br\s*\/?>/i);
+            root.innerHTML = '';
+
+            content.forEach(p_html => {
+                const paraDiv = document.createElement('div');
+                paraDiv.innerHTML = p_html.trim();
+                paraDiv.style.marginBottom = '1em';
+                const text = (paraDiv.textContent || '').trim();
+                if (!text) return;
+
+                const key = String(idx++);
+                map[key] = text;
+
+                // Re-use the paragraph wrapper from AO3 logic
+                const wrapper = document.createElement('div');
+                wrapper.className = 'ao3sn-para';
+                wrapper.dataset.sectionKey = key;
+                const badge = document.createElement('span');
+                badge.className = 'ao3sn-heat';
+                badge.textContent = '';
+                wrapper.appendChild(badge);
+                wrapper.appendChild(paraDiv);
+
+                root.appendChild(wrapper);
+                dom[key] = wrapper;
+            });
+            return { map, dom };
+        }
+
+        const paras = root.querySelectorAll('p');
+        if (paras.length) {
+            paras.forEach(p => {
+                const text = (p.innerText || '').trim();
+                if (!text) return;
+                const key = String(idx++);
+                map[key] = text;
+                dom[key] = ensureParaWrapper(p, key);
+            });
+            return { map, dom };
+        }
+
+        // Fallback: split text by blank lines (DOM heat placement may be limited here)
+        const raw = (root.innerText || '').trim();
+        raw.split(/\n{2,}/).map(s => s.trim()).filter(Boolean).forEach(s => {
+            const key = String(idx++);
+            map[key] = s;
+        });
+        return { map, dom };
+    }
+
+    /** Merge all paragraphs from multiple targets (AO3 single-chapter case). */
+    function collectParagraphsFromTargets(targets) {
+        const map = {};
+        const dom = {};
+        let idx = 1;
+        for (const t of targets) {
+            const { map: m, dom: d } = collectParagraphsFromRoot(t);
+            for (const k of Object.keys(m)) {
+                const nk = String(idx++);
+                map[nk] = m[k];
+                if (d[k]) dom[nk] = d[k];
+            }
+        }
+        return { map, dom };
+    }
 
     /** ---------------------------------------
      * Persistence
@@ -577,15 +694,19 @@
     /**
      * Sends text (and optional seed characters) to /api/summarize, streaming SSE updates.
      * Calls `onUpdate` on EVERY SSE event (data & done).
-     * @param {{text:string, id:string, chapter?:string, characters?: CharacterData[], timeline?: TimelineDay[], source:'ao3'|'inkbunny'}} req
+     * @param {{text:string, id:string, chapter?:string, heat?:Record<string,int>, characters?: CharacterData[], timeline?: TimelineDay[], source:'ao3'|'inkbunny'}} req
      * @param {(partial:{characters?: CharacterData[], timeline?: TimelineDay[]})=>void} onUpdate
      */
     async function streamSummarize(req, onUpdate) {
+        // req.heat is a Record<string,string> when we send sections
+        const joinedText = req.heat ? Object.keys(req.heat).sort((a, b) => +a - +b).map(k => req.heat[k]).join('\n\n') : (req.text || '');
+
         const res = await fetch(SUMMARIZE_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
             body: JSON.stringify({
-                text: req.text,
+                text: joinedText,
+                heat: req.heat || null,
                 id: req.id,
                 chapter: req.chapter || '',
                 source: req.source,
@@ -636,7 +757,8 @@
         const names = [...nameSet].map(s => s && s.trim()).filter(Boolean).sort((a, b) => b.length - a.length)
             .map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
         if (!names.length) return null;
-        return new RegExp(`\\b(?:${names.join('|')})(?:['’]s)?\\b`, 'gi');
+        // Allow Nathan, Nathan's, and James' (common style)
+        return new RegExp(`\\b(?:${names.join('|')})(?:['’]s|['’])?\\b`, 'gi');
     }
 
     /**
@@ -708,9 +830,7 @@
         anime({
             targets: letters,
             scale: [{ value: 1.0, duration: 0 }, {
-                value: 1.15,
-                duration: 120,
-                delay: anime.stagger(12, { start: 0 })
+                value: 1.15, duration: 120, delay: anime.stagger(12, { start: 0 })
             }, { value: 1.0, duration: 140 }],
             translateY: [{ value: -2, duration: 100, delay: anime.stagger(12) }, { value: 0, duration: 140 }],
             easing: 'easeOutQuad'
@@ -730,11 +850,7 @@
 
     function escapeHTML(s) {
         return String(s || '').replace(/[&<>"']/g, c => ({
-            '&': '&amp;',
-            '<': '&lt;',
-            '>': '&gt;',
-            '"': '&quot;',
-            "'": '&#39;'
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
         }[c]));
     }
 
@@ -752,19 +868,8 @@
         <div class="${CLS.field}"><b>Species:</b> ${escapeHTML(d.species || '—')}</div>
         <div class="${CLS.field}"><b>Kind:</b> ${escapeHTML(d.kind || '—')}</div>
       </div>`;
-        const phys = [
-            pd.height && `<div class="${CLS.field}">• Height: ${escapeHTML(pd.height)}</div>`,
-            pd.build && `<div class="${CLS.field}">• Build: ${escapeHTML(pd.build)}</div>`,
-            pd.hair && `<div class="${CLS.field}">• Hair: ${escapeHTML(pd.hair)}</div>`,
-            pd.other && `<div class="${CLS.field}">• Other: ${escapeHTML(pd.other)}</div>`,
-        ].filter(Boolean).join('');
-        const sex = [
-            sc.genitalia && `<div class="${CLS.field}">• Genitalia: ${escapeHTML(sc.genitalia)}</div>`,
-            sc.penis_length_flaccid && `<div class="${CLS.field}">• Penis (flaccid): ${escapeHTML(sc.penis_length_flaccid)}</div>`,
-            sc.penis_length_erect && `<div class="${CLS.field}">• Penis (erect): ${escapeHTML(sc.penis_length_erect)}</div>`,
-            sc.pubic_hair && `<div class="${CLS.field}">• Pubic hair: ${escapeHTML(sc.pubic_hair)}</div>`,
-            sc.other && `<div class="${CLS.field}">• Other: ${escapeHTML(sc.other)}</div>`,
-        ].filter(Boolean).join('');
+        const phys = [pd.height && `<div class="${CLS.field}">• Height: ${escapeHTML(pd.height)}</div>`, pd.build && `<div class="${CLS.field}">• Build: ${escapeHTML(pd.build)}</div>`, pd.hair && `<div class="${CLS.field}">• Hair: ${escapeHTML(pd.hair)}</div>`, pd.other && `<div class="${CLS.field}">• Other: ${escapeHTML(pd.other)}</div>`,].filter(Boolean).join('');
+        const sex = [sc.genitalia && `<div class="${CLS.field}">• Genitalia: ${escapeHTML(sc.genitalia)}</div>`, sc.penis_length_flaccid && `<div class="${CLS.field}">• Penis (flaccid): ${escapeHTML(sc.penis_length_flaccid)}</div>`, sc.penis_length_erect && `<div class="${CLS.field}">• Penis (erect): ${escapeHTML(sc.penis_length_erect)}</div>`, sc.pubic_hair && `<div class="${CLS.field}">• Pubic hair: ${escapeHTML(sc.pubic_hair)}</div>`, sc.other && `<div class="${CLS.field}">• Other: ${escapeHTML(sc.other)}</div>`,].filter(Boolean).join('');
 
         const actsArr = Array.isArray(d.notable_actions) ? d.notable_actions : [];
         let actsList = '';
@@ -875,8 +980,13 @@
                     color: d.color || nameToColor(canon),
                     mentions: d.mentions || 0,
                     name: canon,
-                    age: d.age, gender: d.gender, aliases: Array.isArray(d.aliases) ? [...new Set(d.aliases)] : [],
-                    kind: d.kind || 'minor', role: d.role, species: d.species, personality: d.personality,
+                    age: d.age,
+                    gender: d.gender,
+                    aliases: Array.isArray(d.aliases) ? [...new Set(d.aliases)] : [],
+                    kind: d.kind || 'minor',
+                    role: d.role,
+                    species: d.species,
+                    personality: d.personality,
                     physical_description: d.physical_description || {},
                     sexual_characteristics: d.sexual_characteristics || {},
                     notable_actions: Array.isArray(d.notable_actions) ? d.notable_actions.slice(0) : [],
@@ -1336,8 +1446,7 @@
 
             // Classify characters by mention count
             for (const [name, data] of Object.entries(persist.characters)) {
-                if ((data.mentions || 0) >= MIN_MAJOR_MENTIONS) data.kind = 'major';
-                else if ((data.mentions || 0) >= MIN_MINOR_MENTIONS) data.kind = 'minor';
+                if ((data.mentions || 0) >= MIN_MAJOR_MENTIONS) data.kind = 'major'; else if ((data.mentions || 0) >= MIN_MINOR_MENTIONS) data.kind = 'minor';
             }
 
             // Apply POV gradient
@@ -1362,7 +1471,9 @@
     /** Creates a wrapped element for a detected character name. */
     function makeNameSpan(txt) {
         const original = txt;
-        const canon = persist.characters[original] ? original : (aliasIndex[original] || null);
+        // Strip possessive for lookup, keep original for display
+        const base = original.replace(/(['’]s|['’])$/i, '');
+        const canon = persist.characters[base] ? base : (aliasIndex[base] || null);
         if (!canon || !persist.characters[canon]) return document.createTextNode(original);
 
         const data = persist.characters[canon];
@@ -1372,19 +1483,16 @@
         span.className = `${CLS.name} ${CLS.shine}`;
         span.dataset.name = canon;
         span.style.color = data.color;
-        span.textContent = original;
+        span.textContent = original; // includes the possessive
         const dot = makeInfoDot(data.color);
-        dot.addEventListener('mouseenter', () => {
-            showTooltip(dot, renderCharacterDetailsHTML(data));
-        });
+        dot.addEventListener('mouseenter', () => showTooltip(dot, renderCharacterDetailsHTML(data)));
         dot.addEventListener('mouseleave', () => hideTooltip(dot));
+
         const wrapper = document.createElement('span');
         wrapper.className = 'ao3sn-wrap';
         wrapper.appendChild(dot);
         wrapper.appendChild(span);
-        if (persist.povName && persist.povName === canon) {
-            span.setAttribute('data-main', '1');
-        }
+        if (persist.povName && persist.povName === canon) span.setAttribute('data-main', '1');
         return wrapper;
     }
 
@@ -1451,7 +1559,9 @@
                 if (!chapters.length) {
                     // Fallback: summarize entire page text
                     inc();
-                    await streamSummarize({ text: adapter.collectSingleText(), id, chapter: '', source: adapter.source }, integratePartial).finally(() => dec());
+                    await streamSummarize({
+                        text: adapter.collectSingleText(), id, chapter: '', source: adapter.source
+                    }, integratePartial).finally(() => dec());
                 } else {
                     const seen = new WeakSet();
                     const processing = new WeakSet();
@@ -1463,9 +1573,20 @@
                             const node = chapters.find(c => c.article === article);
                             if (!node) return;
                             processing.add(article);
+                            const { map: paraMap, dom: paraDom } = collectParagraphsFromRoot(node.article);
+
                             inc();
-                            streamSummarize({ text: node.text, id, chapter: node.chapterId || '', source: adapter.source }, integratePartial)
-                                .catch(err => console.warn('[Paige] chapter stream failed:', err))
+                            streamSummarize({
+                                heat: paraMap, id, chapter: node.chapterId || '', source: adapter.source
+                            }, (partial) => {
+                                integratePartial(partial);
+                                if (partial && partial.heat && paraDom) {
+                                    for (const [k, lvl] of Object.entries(partial.heat)) {
+                                        const el = paraDom[k];
+                                        if (el) setParagraphHeat(el, lvl);
+                                    }
+                                }
+                            }).catch(err => console.warn('[Paige] chapter stream failed:', err))
                                 .finally(() => {
                                     dec();
                                     processing.delete(article);
@@ -1477,17 +1598,34 @@
                 }
             } else {
                 // Single text block (AO3 single chapter or Inkbunny page)
+                const targets = adapter.findWrapTargets();
+                const { map: paraMap, dom: paraDom } = collectParagraphsFromTargets(targets);
+
                 inc();
-                await streamSummarize({ text: adapter.collectSingleText(), id, chapter, source: adapter.source }, integratePartial)
-                    .catch(err => {
-                        console.error('[Paige] summarize failed:', err);
-                        const e = document.createElement('div'); e.style.cssText = 'position:fixed;bottom:20px;right:20px;background:crimson;color:#fff;padding:8px 12px;border-radius:8px;z-index:9999;'; e.textContent = 'Paige: summarize failed'; document.body.appendChild(e); setTimeout(() => e.remove(), 5000);
-                    })
-                    .finally(() => dec());
+                await streamSummarize({ heat: paraMap, id, chapter, source: adapter.source }, (partial) => {
+                    integratePartial(partial);
+                    if (partial && partial.heat && paraDom) {
+                        for (const [k, lvl] of Object.entries(partial.heat)) {
+                            const el = paraDom[k];
+                            if (el) setParagraphHeat(el, lvl);
+                        }
+                    }
+                }).catch(err => {
+                    console.error('[Paige] summarize failed:', err);
+                    const e = document.createElement('div');
+                    e.style.cssText = 'position:fixed;bottom:20px;right:20px;background:crimson;color:#fff;padding:8px 12px;border-radius:8px;z-index:9999;';
+                    e.textContent = 'Paige: summarize failed';
+                    document.body.appendChild(e);
+                    setTimeout(() => e.remove(), 5000);
+                }).finally(() => dec());
             }
         } catch (err) {
             console.error('[Paige] summarize error:', err);
-            const e = document.createElement('div'); e.style.cssText = 'position:fixed;bottom:20px;right:20px;background:crimson;color:#fff;padding:8px 12px;border-radius:8px;z-index:9999;'; e.textContent = 'Paige: summarize failed'; document.body.appendChild(e); setTimeout(() => e.remove(), 5000);
+            const e = document.createElement('div');
+            e.style.cssText = 'position:fixed;bottom:20px;right:20px;background:crimson;color:#fff;padding:8px 12px;border-radius:8px;z-index:9999;';
+            e.textContent = 'Paige: summarize failed';
+            document.body.appendChild(e);
+            setTimeout(() => e.remove(), 5000);
             dec();
         }
     })();

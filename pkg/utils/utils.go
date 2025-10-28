@@ -1,11 +1,14 @@
 package utils
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -171,6 +174,82 @@ func ChunkText(text string, limit int) []string {
 	return out
 }
 
+type Paragraph struct {
+	Index int
+	Text  string
+}
+
+func ChunkParagraph(paras map[string]string, limit int) [][]Paragraph {
+	if limit <= 0 || len(paras) == 0 {
+		return nil
+	}
+
+	paragraphs := make([]Paragraph, 0, len(paras))
+	for k, v := range paras {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			idx, err := strconv.Atoi(k)
+			if err != nil {
+				Logf("ChunkParagraph: could not parse paragraph key to int: %s", k)
+				continue
+			}
+			paragraphs = append(paragraphs, Paragraph{Index: idx, Text: v})
+		}
+	}
+	if len(paragraphs) == 0 {
+		return nil
+	}
+
+	slices.SortFunc(paragraphs, func(a, b Paragraph) int {
+		return cmp.Compare(a.Index, b.Index)
+	})
+
+	const joiner = "\n\n"
+	jlen := runeLen(joiner)
+
+	var out [][]Paragraph
+	var cur []Paragraph
+	curLen := 0
+
+	flush := func() {
+		if len(cur) > 0 {
+			out = append(out, cur)
+			cur = nil
+			curLen = 0
+		}
+	}
+
+	for _, p := range paragraphs {
+		plen := runeLen(p.Text)
+
+		if plen > limit {
+			flush()
+			out = append(out, []Paragraph{p})
+			continue
+		}
+
+		add := plen
+		if curLen > 0 {
+			add += jlen
+		}
+
+		if curLen+add <= limit {
+			cur = append(cur, p)
+			curLen += add
+		} else {
+			flush()
+			cur = append(cur, p)
+			curLen = plen
+		}
+	}
+
+	if len(cur) > 0 {
+		out = append(out, cur)
+	}
+
+	return out
+}
+
 func splitBySpaceRune(s string, limit int) []string {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -252,7 +331,7 @@ func NewSSEWriter(c echo.Context) *SSEWriter {
 }
 
 // Event sends an SSE event with an event name and data (struct/map/string).
-func (s *SSEWriter) Event(event string, data interface{}) error {
+func (s *SSEWriter) Event(event string, data any) error {
 	if s.done {
 		return nil
 	}
@@ -278,6 +357,6 @@ func (s *SSEWriter) Close() {
 		return
 	}
 	s.done = true
-	fmt.Fprint(s.w, "event: close\ndata: {}\n\n")
+	fmt.Fprint(s.w, "event: close\ndata: null\n\n")
 	s.fl.Flush()
 }

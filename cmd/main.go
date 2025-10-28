@@ -2,18 +2,22 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/labstack/gommon/log"
 
 	"paige/pkg/inference"
 	"paige/pkg/schema"
 	"paige/pkg/server"
+	"paige/pkg/utils"
 )
 
 func main() {
-	ctx := context.Background()
+	ctx, done := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
 
 	model := os.Getenv("OPENAI_MODEL")
 	if model == "" {
@@ -36,19 +40,19 @@ func main() {
 	srv := server.NewServer(ctx, inf)
 	srv.Echo.Logger.SetLevel(log.DEBUG)
 
-	f, err := os.Open("CharacterSummary.json")
-	if err == nil {
-		var summaries map[string]schema.Summary
-		err := json.NewDecoder(f).Decode(&summaries)
-		if err != nil {
-			log.Warnf("Failed to decode CharacterSummary.json: %v", err)
-		} else {
-			srv.Summary = summaries
-			var char int
-			for _, summary := range summaries {
-				char += len(summary.Characters)
-			}
-			log.Infof("Loaded %d characters from CharacterSummary.json", char)
+	summaries, err := utils.Load[map[string]schema.Summary]("CharacterSummary.json")
+	if err == nil && summaries != nil {
+		srv.Summary = summaries
+		var char int
+		for _, summary := range summaries {
+			char += len(summary.Characters)
+		}
+		log.Infof("Loaded %d characters from %d stories", char, len(summaries))
+	} else {
+		summary := make(map[string]schema.Summary)
+		srv.Summary = summary
+		if !errors.Is(err, os.ErrNotExist) {
+			log.Warnf("Failed to load CharacterSummary.json: %v", err)
 		}
 	}
 
@@ -57,7 +61,18 @@ func main() {
 		addr = ":" + envAddr
 	}
 
-	if err := srv.Start(addr); err != nil {
-		log.Fatal(err)
+	finishedShutDown := make(chan struct{})
+	go func() {
+		<-ctx.Done()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Fatal(err)
+		}
+		done()
+		close(finishedShutDown)
+	}()
+
+	if err := srv.Start(addr); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Error(err)
 	}
+	<-finishedShutDown
 }

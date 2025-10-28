@@ -3,6 +3,9 @@ package schema
 type Summary struct {
 	Characters []Character `json:"characters" jsonschema_description:"List of extracted characters with their attributes and actions"`
 	Timeline   []Timeline  `json:"timeline" jsonschema_description:"Chronological sequence of dated events extracted from the story"`
+
+	Chapters map[string]bool `json:"chapters" jsonschema_description:"List of chapter IDs visited (filled by backend)"`
+	Heat     map[string]int  `json:"heat,omitempty" jsonschema_description:"Mapping of paragraph (starting from 1) with a level of 0-3 based on sexual activity intensity"`
 }
 
 type Character struct {
