@@ -169,7 +169,7 @@
 .ao3sn-para {
   position: relative;
   padding-left: 0.6em;
-  margin-left: 0.25em;
+  margin-left: 1.25em;
   --ao3sn-heat: 0; /* 0..1 maps to transparency of the red bar */
 }
 .ao3sn-para::before {
@@ -226,14 +226,15 @@
                 const article = ch.querySelector('div.userstuff.module[role="article"]') || ch.querySelector('[role="article"].userstuff') || ch.querySelector('.userstuff');
                 if (!article) return;
 
+                // Prefer the chapter ID from the title link, as it's the canonical ID.
+                // The element ID (`chapter-2`) is just the chapter number.
                 let chapterId = '';
+                const link = ch.querySelector('h3.title a[href*="/chapters/"]');
+                const lm = link && link.getAttribute('href').match(/\/chapters\/(\d+)/);
+                if (lm) chapterId = lm[1];
+
                 const idMatch = (ch.id || '').match(/^chapter-(\d+)/);
-                if (idMatch) chapterId = idMatch[1];
-                if (!chapterId) {
-                    const link = ch.querySelector('a[href*="/chapters/"]');
-                    const lm = link && link.getAttribute('href').match(/\/chapters\/(\d+)/);
-                    if (lm) chapterId = lm[1];
-                }
+                if (!chapterId && idMatch) chapterId = idMatch[1];
 
                 const clone = article.cloneNode(true);
                 const stray = clone.querySelector("h3#work.landmark.heading");
@@ -370,7 +371,8 @@
      *   timeline: TimelineDay[],
      *   pinnedPanel: boolean,
      *   panelHeight: number,
-     *   povName: string|null
+     *   povName: string|null,
+     *   heat: Record<string, number>=
      * }} Persist
      */
 
@@ -537,7 +539,8 @@
             timeline: [],
             pinnedPanel: false,
             panelHeight: Math.round(window.innerHeight * 0.6),
-            povName: null
+            povName: null,
+            heat: {}
         };
         try {
             const raw = localStorage.getItem(LS_KEY);
@@ -547,7 +550,8 @@
                 ...freshDefault, ...parsed,
                 characters: parsed.characters || {},
                 pronouns: parsed.pronouns || {},
-                timeline: parsed.timeline || []
+                timeline: parsed.timeline || [],
+                heat: parsed.heat || {}
             };
             for (const v of Object.values(out.characters)) {
                 if (v && 'avatar' in v) delete v.avatar;
@@ -572,6 +576,7 @@
             }
         }
         if (persist.timeline && persist.timeline.length > 50) persist.timeline = persist.timeline.slice(-50);
+        if (persist.heat && Object.keys(persist.heat).length > 2000) persist.heat = {};
     }
 
     /** Writes persist safely; prunes on QuotaExceededError. */
@@ -1286,6 +1291,10 @@
     persist.characters = persist.characters || {};
     persist.pronouns = persist.pronouns || {};
     persist.timeline = persist.timeline || [];
+    persist.heat = persist.heat || {};
+
+    // DOM map for paragraph heat, populated during paragraph collection
+    let paraDomMap = {};
 
     // Pronoun setup (stable colors)
     for (const p of ['he', 'she', 'they']) {
@@ -1543,12 +1552,23 @@
             if (partial && Array.isArray(partial.timeline)) {
                 changed = mergeTimeline(partial.timeline) || changed;
             }
+            if (partial && partial.heat) {
+                Object.assign(persist.heat, partial.heat);
+                changed = true;
+            }
             if (changed) {
                 normalizeCharactersStore();
                 savePersist(persist);
                 renderCharacters();
                 renderTimeline();
                 reprocessNamesDebounced();
+            }
+            // Always try to render heat from any partial, even if no "changed" for persist
+            if (partial && partial.heat && paraDomMap) {
+                for (const [k, lvl] of Object.entries(partial.heat)) {
+                    const el = paraDomMap[k];
+                    if (el) setParagraphHeat(el, lvl);
+                }
             }
         };
 
@@ -1573,20 +1593,11 @@
                             const node = chapters.find(c => c.article === article);
                             if (!node) return;
                             processing.add(article);
-                            const { map: paraMap, dom: paraDom } = collectParagraphsFromRoot(node.article);
+                            const { map: paraMap, dom } = collectParagraphsFromRoot(node.article);
+                            Object.assign(paraDomMap, dom);
 
                             inc();
-                            streamSummarize({
-                                heat: paraMap, id, chapter: node.chapterId || '', source: adapter.source
-                            }, (partial) => {
-                                integratePartial(partial);
-                                if (partial && partial.heat && paraDom) {
-                                    for (const [k, lvl] of Object.entries(partial.heat)) {
-                                        const el = paraDom[k];
-                                        if (el) setParagraphHeat(el, lvl);
-                                    }
-                                }
-                            }).catch(err => console.warn('[Paige] chapter stream failed:', err))
+                            streamSummarize({ heat: paraMap, id, chapter: node.chapterId || '', source: adapter.source }, integratePartial).catch(err => console.warn('[Paige] chapter stream failed:', err))
                                 .finally(() => {
                                     dec();
                                     processing.delete(article);
@@ -1599,18 +1610,17 @@
             } else {
                 // Single text block (AO3 single chapter or Inkbunny page)
                 const targets = adapter.findWrapTargets();
-                const { map: paraMap, dom: paraDom } = collectParagraphsFromTargets(targets);
+                const { map: paraMap, dom } = collectParagraphsFromTargets(targets);
+                paraDomMap = dom;
+
+                // Render cached heat immediately
+                for (const [k, lvl] of Object.entries(persist.heat || {})) {
+                    const el = paraDomMap[k];
+                    if (el) setParagraphHeat(el, lvl);
+                }
 
                 inc();
-                await streamSummarize({ heat: paraMap, id, chapter, source: adapter.source }, (partial) => {
-                    integratePartial(partial);
-                    if (partial && partial.heat && paraDom) {
-                        for (const [k, lvl] of Object.entries(partial.heat)) {
-                            const el = paraDom[k];
-                            if (el) setParagraphHeat(el, lvl);
-                        }
-                    }
-                }).catch(err => {
+                await streamSummarize({ heat: paraMap, id, chapter, source: adapter.source }, integratePartial).catch(err => {
                     console.error('[Paige] summarize failed:', err);
                     const e = document.createElement('div');
                     e.style.cssText = 'position:fixed;bottom:20px;right:20px;background:crimson;color:#fff;padding:8px 12px;border-radius:8px;z-index:9999;';

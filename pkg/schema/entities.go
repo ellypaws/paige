@@ -6,6 +6,8 @@ type Summary struct {
 
 	Chapters map[string]bool `json:"chapters" jsonschema_description:"List of chapter IDs visited (filled by backend)"`
 	Heat     map[string]int  `json:"heat,omitempty" jsonschema_description:"Mapping of paragraph (starting from 1) with a level of 0-3 based on sexual activity intensity"`
+
+	StoredHeat map[string]map[string]int `json:"stored_heat,omitempty" jsonschema_description:"Backend storage of heat maps per chapter ID"`
 }
 
 type Character struct {

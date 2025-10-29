@@ -31,7 +31,7 @@ type summarizeReq struct {
 	Chapter    string             `json:"chapter,omitempty"`
 	Characters []schema.Character `json:"characters"`
 	Timeline   []schema.Timeline  `json:"timeline"`
-	Heat       map[string]string  `json:"heat,omitempty"`
+	Paragraphs map[string]string  `json:"paragraphs,omitempty"`
 }
 
 type NameInferResponse struct {
@@ -164,7 +164,7 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 	if req.Source != "" && req.ID != "" {
 		req.ID = req.Source + ":" + req.ID
 	}
-	log.Info("starting summarization", "id", req.ID, "chars", len(req.Text), "chapters", len(req.Timeline))
+	log.Info("starting summarization", "id", req.ID, "chars", len(req.Text), "paragraphs", len(req.Paragraphs))
 	w := utils.NewSSEWriter(c)
 	defer w.Close()
 
@@ -174,15 +174,19 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 	}
 	if existing, ok := s.Summary[req.ID]; ok {
 		summary = existing
+		summary.Heat = nil
+		if heat, ok := summary.StoredHeat[req.Chapter]; ok && len(heat) > 0 {
+			summary.Heat = summary.StoredHeat[req.Chapter]
+		}
 	}
 
-	hasCharacters := len(req.Characters) > 0
-	isAO3 := req.Source == "ao3" && req.Chapter != "" && summary.Chapters[req.Chapter]
+	hasCharacters := len(summary.Characters) > 0
+	isAO3 := req.Source == "ao3" && summary.Chapters[req.Chapter]
 	isInkbunny := req.Source == "inkbunny"
 	hasHeat := len(summary.Heat) > 0
 
 	if hasCharacters && hasHeat && (isAO3 || isInkbunny) {
-		log.Info("loaded existing summary data", "id", req.ID, "characters", len(summary.Characters), "timeline", len(summary.Timeline))
+		log.Info("loaded existing summary data", "id", req.ID, "characters", len(summary.Characters), "timeline", len(summary.Timeline), "chapters", len(summary.Chapters))
 		return w.Event("done", summary)
 	}
 
@@ -192,7 +196,7 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 
 	seed := dedupeByName(req.Characters)
 
-	if len(req.Heat) == 0 && req.Text == "" {
+	if len(req.Paragraphs) == 0 && req.Text == "" {
 		log.Warn("empty text in summarization, returning existing data")
 		return w.Event("done", schema.Summary{Characters: seed, Timeline: req.Timeline, Chapters: summary.Chapters})
 	}
@@ -303,9 +307,10 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 		} else {
 			summary.Heat = parsed.Heat
 		}
-		if req.Chapter != "" {
-			summary.Chapters[req.Chapter] = true
+		if summary.StoredHeat == nil {
+			summary.StoredHeat = make(map[string]map[string]int)
 		}
+		summary.StoredHeat[req.Chapter] = summary.Heat
 
 		if err := w.Event("data", summary); err != nil {
 			log.Warn("SSE write error", "error", err)
@@ -341,8 +346,8 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 
 func chunkRequest(req summarizeReq, limit int) iter.Seq2[int, string] {
 	return func(yield func(int, string) bool) {
-		if len(req.Heat) > 0 {
-			for i, chunk := range utils.ChunkParagraph(req.Heat, limit) {
+		if len(req.Paragraphs) > 0 {
+			for i, chunk := range utils.ChunkParagraph(req.Paragraphs, limit) {
 				if len(chunk) == 0 {
 					return
 				}
