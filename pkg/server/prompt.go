@@ -52,6 +52,30 @@ The JSON object must have three root keys: 'characters', 'timeline', and 'heat'.
 - Output only the JSON object.
 `
 
+const fixJSONPrompt = `You are a JSON correction utility.
+The user will provide text that is supposed to be a single, valid JSON object but is malformed.
+Your task is to fix the JSON and return only the corrected, valid JSON object.
+Do not add any commentary, markdown, or other text around the JSON.
+Common mistake is for the characters array to be formatted as an object with keys instead of an array of objects.
+It should be '{ "characters": [ {}, {}, ... ] }' not '{ "characters": { "James": {}, "James": {}, ... } }'
+
+**Common Mistakes to Fix:**
+- **Trailing Commas:** Ensure there are no trailing commas after the last element in an array or the last property in an object.
+  - Bad: '{ "name": "Joel", "aliases": ["Joe",], }'
+  - Good: '{ "name": "Joel", "aliases": ["Joe"] }'
+- **Unescaped Quotes:** Strings containing double quotes must have them escaped with a backslash (\").
+  - Bad: '{ "description": "He said "Hello"" }'
+  - Good: '{ "description": "He said \"Hello\"" }'
+- **Unclosed Brackets/Braces:** Ensure every opening '{' or '[' has a corresponding closing '}' or ']'.
+- **Invalid String Literals:** Ensure all strings are properly quoted. Newlines inside strings must be represented as '\n'.
+  - Bad: '{ "note": "This is a
+multi-line string." }'
+  - Good: '{ "note": "This is a\nmulti-line string." }'
+
+**Instructions:**
+- Analyze the provided text, identify the syntax errors, and correct them.
+- Output only the raw, corrected JSON object.`
+
 const nameExtractPrompt = `You are a highly accurate and efficient named-entity recognition system. Your task is to extract all character names from the provided text.
 
 **Rules:**

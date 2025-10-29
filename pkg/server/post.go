@@ -248,7 +248,7 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 		}
 
 		params := &openai.ChatCompletionNewParams{
-			MaxCompletionTokens: openai.Int(cmp.Or(int64(tokenCount), totalCharacters) * 2),
+			MaxCompletionTokens: openai.Int(max(int64(tokenCount), totalCharacters, 8192*4) * 2),
 			ResponseFormat:      schema.StructuredOutputsResponseFormat(),
 		}
 
@@ -294,9 +294,20 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 
 		var parsed schema.Summary
 		if err := json.Unmarshal([]byte(out), &parsed); err != nil || len(parsed.Characters) == 0 {
-			log.Warn("failed to parse summarization JSON", "chunk", i+1, "error", err)
-			log.Debug("model output", "output", out)
-			continue
+			log.Warn("failed to parse summarization JSON, attempting to fix", "chunk", i+1, "error", err)
+			log.Debug("original model output", "output", out)
+
+			fixedOut, fixErr := s.Inferencer.Infer(ctx, params, systemPrompt+"\n\n"+fixJSONPrompt, chunk+"\n\nFix and complete the following malformed JSON:\n\n"+out)
+			if fixErr != nil {
+				log.Warn("failed to fix inference", "chunk", i+1, "error", fixErr)
+				continue
+			}
+
+			if err := json.Unmarshal([]byte(fixedOut), &parsed); err != nil || len(parsed.Characters) == 0 {
+				log.Warn("failed to parse summarization JSON after fix attempt", "chunk", i+1, "error", err)
+				log.Debug("fixed model output", "output", fixedOut)
+				continue
+			}
 		}
 
 		log.Debug("merging summarization results", "chunk", i+1, "chars", len(parsed.Characters), "events", len(parsed.Timeline))
