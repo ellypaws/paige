@@ -3,6 +3,8 @@ package server
 import (
 	"cmp"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"iter"
 	"maps"
@@ -12,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/log"
 	"github.com/labstack/echo/v4"
@@ -184,8 +187,9 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 	isAO3 := req.Source == "ao3" && summary.Chapters[req.Chapter]
 	isInkbunny := req.Source == "inkbunny"
 	hasHeat := len(summary.Heat) > 0
+	cacheControl := c.Request().Header.Get("Cache-Control") != "no-cache"
 
-	if hasCharacters && hasHeat && (isAO3 || isInkbunny) {
+	if cacheControl && hasCharacters && hasHeat && (isAO3 || isInkbunny) {
 		log.Info("loaded existing summary data", "id", req.ID, "characters", len(summary.Characters), "timeline", len(summary.Timeline), "chapters", len(summary.Chapters))
 		return w.Event("done", summary)
 	}
@@ -226,6 +230,34 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 			break
 		}
 
+		id := fmt.Sprintf("%s:%s chapter:%s chunk:%d", req.Source, req.ID, req.Chapter, i)
+		if _, ok := s.Forbids[id]; ok {
+			continue
+		}
+
+		var wg sync.WaitGroup
+		var forbidden *schema.Forbids
+		for _, forbid := range s.Forbids {
+			wg.Go(func() {
+				if utils.Similarity(forbid.Text, chunk) >= 0.8 {
+					forbidden = &forbid
+				}
+			})
+		}
+		wg.Wait()
+		if forbidden != nil {
+			compressed, _ := utils.CompressToBase64(chunk)
+			forbidden.Compressed = compressed
+			s.Forbids[id] = schema.Forbids{
+				Reason:     "similar to forbidden content",
+				Text:       chunk,
+				Compressed: compressed,
+				Error:      forbidden.Error,
+				Raw:        forbidden.Raw,
+			}
+			continue
+		}
+
 		if len(summary.Characters) > 0 || len(summary.Timeline) > 0 {
 			bin, err := json.MarshalIndent(schema.Summary{Characters: summary.Characters, Timeline: summary.Timeline}, "", " ")
 			if err != nil {
@@ -233,10 +265,6 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 				return c.JSON(http.StatusInternalServerError, utils.ErrJSON("failed preparing summarization context"))
 			}
 			chunk += "\n\nIterate on the following JSON, only changing details if mentioned or explicitly stated:\n" + string(bin)
-		}
-
-		if cancelled(c) {
-			break
 		}
 
 		totalCharacters := int64(len(systemPrompt) + len(chunk))
@@ -252,11 +280,39 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 			ResponseFormat:      schema.StructuredOutputsResponseFormat(),
 		}
 
+		if cancelled(c) {
+			break
+		}
+
 		out, err := s.Inferencer.Infer(ctx, params, systemPrompt, chunk)
 		if err != nil {
-			log.Warn("summarization inference error", "chunk", i+1, "error", err)
-			_ = w.Event("error", map[string]string{"chunk": strconv.Itoa(i + 1), "error": err.Error(), "text": chunk})
-			break
+			var apiErr *openai.Error
+			if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden {
+				log.Error("summarization forbidden", "chunk", i+1, "error", err)
+				if s.Forbids == nil {
+					s.Forbids = make(map[string]schema.Forbids)
+				}
+				compressed, _ := utils.CompressToBase64(chunk)
+				s.Forbids[id] = schema.Forbids{
+					Reason:     "summarization forbidden",
+					Text:       chunk,
+					Compressed: compressed,
+					Raw:        apiErr.RawJSON(),
+				}
+				_ = w.Event("error", map[string]string{
+					"chunk": strconv.Itoa(i + 1),
+					"error": apiErr.Error(),
+					"text":  chunk,
+				})
+				if err := utils.Save("Forbids.json", s.Forbids); err != nil {
+					log.Warn("failed saving forbids data", "error", err)
+				}
+				continue
+			} else {
+				log.Warn("summarization inference error", "chunk", i+1, "error", err)
+				_ = w.Event("error", map[string]string{"chunk": strconv.Itoa(i + 1), "error": err.Error(), "text": chunk})
+				break
+			}
 		}
 
 		if cancelled(c) {
@@ -414,8 +470,6 @@ func (s *Server) handleGetUserscript(c echo.Context) error {
 	}
 	return c.Blob(http.StatusOK, "text/javascript; charset=utf-8", b)
 }
-
-// --- helpers ---
 
 func dedupeByName(in []schema.Character) []schema.Character {
 	seen := make(map[string]struct{}, len(in))

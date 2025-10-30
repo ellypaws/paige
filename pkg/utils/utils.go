@@ -1,9 +1,13 @@
 package utils
 
 import (
+	"bytes"
 	"cmp"
+	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"regexp"
@@ -359,4 +363,38 @@ func (s *SSEWriter) Close() {
 	s.done = true
 	fmt.Fprint(s.w, "event: close\ndata: null\n\n")
 	s.fl.Flush()
+}
+
+// CompressToBase64 compresses text using gzip and encodes it as Base64.
+// The result is safe to store in JSON.
+func CompressToBase64(s string) (string, error) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write([]byte(s)); err != nil {
+		gz.Close()
+		return "", err
+	}
+	if err := gz.Close(); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
+}
+
+// DecompressFromBase64 decodes Base64 and decompresses gzip-compressed text.
+func DecompressFromBase64(encoded string) (string, error) {
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", err
+	}
+	r, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	defer r.Close()
+
+	out, err := io.ReadAll(r)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }

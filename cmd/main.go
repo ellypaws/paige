@@ -56,6 +56,12 @@ func main() {
 		}
 	}
 
+	forbids, _ := utils.Load[map[string]schema.Forbids]("Forbids.json")
+	if forbids == nil {
+		forbids = make(map[string]schema.Forbids)
+	}
+	srv.Forbids = forbids
+
 	addr := ":8080"
 	if envAddr := os.Getenv("PORT"); envAddr != "" {
 		addr = ":" + envAddr

@@ -16,6 +16,8 @@ type Server struct {
 	Inferencer inference.Inferencer
 	Summary    map[string]schema.Summary
 	Ctx        context.Context
+
+	Forbids map[string]schema.Forbids
 }
 
 func NewServer(ctx context.Context, inf inference.Inferencer) *Server {
@@ -58,6 +60,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	utils.Logf("Shutting down server...")
 
 	saveErr := utils.Save("CharacterSummary.json", s.Summary)
+	_ = utils.Save("Forbids.json", s.Forbids)
 	shutDownErr := s.Echo.Shutdown(ctx)
 	if shutDownErr != nil {
 		return shutDownErr
