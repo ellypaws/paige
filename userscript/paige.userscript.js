@@ -30,9 +30,22 @@
     const MIN_MAJOR_MENTIONS = 6;
     const MIN_MINOR_MENTIONS = 2;
 
-    /** Work-scoped key (per-site). */
-    const WORK_ID = (location.hostname.includes('archiveofourown.org') ? ((location.pathname.match(/\/(works|chapters)\/(\d+)/) || []).slice(1).join(':') || location.pathname) : (location.pathname + location.search || location.pathname)) || location.href;
-
+    /** Work-scoped key (per-site). Chapter-specific on AO3 unless viewing full work. */
+    const getWorkId = () => {
+        if (location.hostname.includes('archiveofourown.org')) {
+            const isFullWork = new URLSearchParams(window.location.search).get("view_full_work") === "true";
+            const workMatch = location.pathname.match(/\/works\/(\d+)/);
+            const workId = workMatch ? workMatch[1] : null;
+            if (!workId) return location.pathname; // Fallback
+    
+            if (isFullWork) return `work:${workId}`;
+    
+            const chapterMatch = location.pathname.match(/\/chapters\/(\d+)/);
+            return chapterMatch ? `work:${workId}:chapter:${chapterMatch[1]}` : `work:${workId}`;
+        }
+        return (location.pathname + location.search) || location.pathname;
+    };
+    const WORK_ID = getWorkId() || location.href;
     const LS_KEY = `ao3-smart-names:v1:${location.hostname}:${WORK_ID}`;
 
     /** CSS class names used by the script. */
