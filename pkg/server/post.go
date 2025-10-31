@@ -375,7 +375,7 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 			summary.Heat = parsed.Heat
 		}
 		if summary.StoredHeat == nil {
-			summary.StoredHeat = make(map[string]map[string]int)
+			summary.StoredHeat = make(map[string]map[string]float64)
 		}
 		summary.StoredHeat[req.Chapter] = summary.Heat
 

@@ -27,11 +27,14 @@ The JSON object must have three root keys: 'characters', 'timeline', and 'heat'.
     * 'characters_involved': An array of character names involved in the event.
 
 **Heat**:
-- 'heat' is an object where keys are paragraph numbers (as strings) and values are integers from 0 to 3 representing the sexual heat level of that paragraph.
-  * 0: No sexual or explicit content (e.g., everyday conversations, non-romantic interactions).
-  * 1: Mild sexual content (e.g., innuendo, kissing, light flirting without physical details).
-  * 2: Moderate sexual content (e.g., nudity, touching, fondling, without penetration or explicit climax).
-  * 3: High sexual content (e.g., explicit sexual acts, masturbation, penetration, oral sex, ejaculation, detailed erotic descriptions. Lewd dialogue only is 1 or 2).
+- 'heat' is an object where keys are paragraph numbers (as strings) and values are numbers from 0 to 3 in 0.5 increments representing the sexual heat level of that paragraph.
+  * 0.0: No sexual or explicit content (e.g., everyday conversations, non-romantic interactions).
+  * 0.5: Extremely subtle hint of attraction (e.g., brief lingering glance, faint blush, non-sexual compliment on appearance).
+  * 1.0: Mild sexual content (e.g., innuendo, light flirting, brief non-explicit kiss).
+  * 1.5: Slightly intensified mild content (e.g., prolonged kissing, light caressing over clothing, suggestive dialogue; **non-sexual nudity**, e.g., changing clothes, bathing without arousal focus).
+  * 2.0: Moderate sexual content (e.g., touching/fondling over or under clothing, partial nudity with sexual context; **non-sexual erections**, e.g., morning wood or incidental without stimulation).
+  * 2.5: Heightened moderate content (e.g., full nudity with sexual intent, heavy petting, manual stimulation; **self-stimulation without a participant**, e.g., masturbation alone, short of climax).
+  * 3.0: High sexual content (e.g., explicit sexual acts including penetration, oral sex, **self-stimulation or acts involving other partners leading to cumming/orgasm**, ejaculation; highly detailed erotic descriptions. Lewd dialogue alone rates 1.0–1.5).
 
 **Rules**:
 - Characters is an array of objects [{}, {}], not a key object pair.

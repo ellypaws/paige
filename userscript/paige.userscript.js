@@ -192,7 +192,7 @@
   top: 0; bottom: 0;
   width: 6px;
   border-radius: 4px;
-  background: linear-gradient(90deg, rgba(255,0,0,var(--ao3sn-heat)) 0%, rgba(255,0,0,0) 100%);
+  background: linear-gradient(180deg, rgba(255,0,0,var(--ao3sn-heat)) 0%, rgba(255,0,0,0) 100%);
 }
 .ao3sn-heat {
   position: absolute;
@@ -441,12 +441,13 @@
     function ensureParaWrapper(p, key) {
         const existing = p.closest('.ao3sn-para');
         if (existing) {
-            if (!existing.dataset.sectionKey) existing.dataset.sectionKey = key;
+            existing.dataset.sectionKey = key; // Always set the key to ensure it's up-to-date
             return existing;
         }
         const wrap = document.createElement('div');
         wrap.className = 'ao3sn-para';
         wrap.dataset.sectionKey = key;
+        wrap.title = `Paragraph #${key}`;
 
         const badge = document.createElement('span');
         badge.className = 'ao3sn-heat';
@@ -460,15 +461,27 @@
 
     /** Map 0..3 into alpha + emojis, then paint a section container. */
     function setParagraphHeat(container, level) {
-        const n = Math.max(0, Math.min(3, (level | 0)));
-        const alpha = n === 0 ? 0 : n === 1 ? 0.25 : n === 2 ? 0.55 : 0.85;
+        const n = Math.max(0, Math.min(3, level));
+        const alpha = n === 0 ? 0 : n <= 1 ? 0.25 : n <= 2 ? 0.55 : 0.85;
         container.style.setProperty('--ao3sn-heat', String(alpha));
         const badge = container.querySelector('.ao3sn-heat');
-        if (badge) badge.innerHTML = n ? '🔥<br>'.repeat(n) : '';
+        if (badge) {
+            const full = Math.floor(n);
+            const half = n - full >= 0.5;
+            let html = '🔥<br>'.repeat(full);
+            if (half) html += '<span style="display:inline-block;height:0.5em;overflow:hidden;line-height:1em;">🔥</span><br>';
+            badge.innerHTML = html;
+        }
     }
 
     /** Extract numbered paragraphs from a given article/root node. Returns { map, dom }. */
-    function collectParagraphsFromRoot(root) {
+    /**
+     * Extracts numbered paragraphs from a given article/root node.
+     * @param {Element} root The root element to search for paragraphs.
+     * @param {string} [keyPrefix=''] An optional prefix for generated paragraph keys to ensure global uniqueness.
+     * @returns {{map: Record<string, string>, dom: Record<string, Element>}} An object containing a map of paragraph keys to text content, and a map of paragraph keys to their DOM wrapper elements.
+     */
+    function collectParagraphsFromRoot(root, keyPrefix = '') {
         const map = {};
         const dom = {};
         let idx = 1;
@@ -483,8 +496,8 @@
                 paraDiv.style.marginBottom = '1em';
                 const text = (paraDiv.textContent || '').trim();
                 if (!text) return;
-
-                const key = String(idx++);
+                
+                const key = keyPrefix + String(idx++);
                 map[key] = text;
 
                 // Re-use the paragraph wrapper from AO3 logic
@@ -508,7 +521,7 @@
             paras.forEach(p => {
                 const text = (p.innerText || '').trim();
                 if (!text) return;
-                const key = String(idx++);
+                const key = keyPrefix + String(idx++);
                 map[key] = text;
                 dom[key] = ensureParaWrapper(p, key);
             });
@@ -518,13 +531,18 @@
         // Fallback: split text by blank lines (DOM heat placement may be limited here)
         const raw = (root.innerText || '').trim();
         raw.split(/\n{2,}/).map(s => s.trim()).filter(Boolean).forEach(s => {
-            const key = String(idx++);
+            const key = keyPrefix + String(idx++);
             map[key] = s;
         });
         return { map, dom };
     }
 
     /** Merge all paragraphs from multiple targets (AO3 single-chapter case). */
+    /**
+     * Merges all paragraphs from multiple target elements into a single map and DOM mapping.
+     * @param {Element[]} targets An array of target elements to collect paragraphs from.
+     * @returns {{map: Record<string, string>, dom: Record<string, Element>}} An object containing a map of paragraph keys to text content, and a map of paragraph keys to their DOM wrapper elements.
+     */
     function collectParagraphsFromTargets(targets) {
         const map = {};
         const dom = {};
@@ -534,7 +552,11 @@
             for (const k of Object.keys(m)) {
                 const nk = String(idx++);
                 map[nk] = m[k];
-                if (d[k]) dom[nk] = d[k];
+                if (d[k]) {
+                    d[k].dataset.sectionKey = nk; // Update the data-sectionKey on the DOM element
+                    d[k].title = `Paragraph #${nk}`;
+                    dom[nk] = d[k];
+                }
             }
         }
         return { map, dom };
@@ -712,24 +734,33 @@
     /**
      * Sends text (and optional seed characters) to /api/summarize, streaming SSE updates.
      * Calls `onUpdate` on EVERY SSE event (data & done).
-     * @param {{text:string, id:string, chapter?:string, heat?:Record<string,int>, characters?: CharacterData[], timeline?: TimelineDay[], source:'ao3'|'inkbunny'}} req
-     * @param {(partial:{characters?: CharacterData[], timeline?: TimelineDay[]})=>void} onUpdate
+     *
+     * @param {(
+     *   | { text: string, paragraphs?: Record<string, string>, id: string, chapter?: string, characters?: CharacterData[], timeline?: TimelineDay[], source: 'ao3'|'inkbunny', force?: boolean }
+     *   | { text?: string, paragraphs: Record<string, string>, id: string, chapter?: string, characters?: CharacterData[], timeline?: TimelineDay[], source: 'ao3'|'inkbunny', force?: boolean }
+     * )} req
+     * @param {(partial: { characters?: CharacterData[], timeline?: TimelineDay[] }) => void} onUpdate
      */
     async function streamSummarize(req, onUpdate) {
-        // req.heat is a Record<string,string> when we send sections
-        const joinedText = req.heat ? Object.keys(req.heat).sort((a, b) => +a - +b).map(k => req.heat[k]).join('\n\n') : (req.text || '');
+        // req.paragraphs is a Record<string,string> when we send sections
+        const joinedText = req.paragraphs ? Object.keys(req.paragraphs).sort((a, b) => +a - +b).map(k => req.paragraphs[k]).join('\n\n') : (req.text || '');
+
+        const headers = { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' };
+        if (req.force) {
+            headers['Cache-Control'] = 'no-cache';
+        }
 
         const res = await fetch(SUMMARIZE_URL, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+            headers,
             body: JSON.stringify({
                 text: joinedText,
-                heat: req.heat || null,
+                paragraphs: req.paragraphs || null,
                 id: req.id,
                 chapter: req.chapter || '',
                 source: req.source,
-                characters: req.characters || [],
-                timeline: req.timeline || []
+                characters: persist.characters ? Object.values(persist.characters) : [],
+                timeline: persist.timeline || []
             }),
         });
         if (!res.ok || !res.body) throw new Error(`Summarize error: ${res.status}`);
@@ -1556,6 +1587,12 @@
     // Streaming logic (site-specific)
     (async function run() {
         const { id, chapter } = adapter.parseWorkAndChapterID();
+        const perfEntry = performance.getEntriesByType("navigation")[0];
+        let isForceReload = false;
+        // type 'reload' can be a normal or hard reload. There's no perfect way to know,
+        // but we can assume if the user is reloading, they might want fresh data.
+        // A true hard reload (ctrl+f5) is type 'navigate' on some browsers, but sends `Cache-Control: no-cache`.
+        if (perfEntry && perfEntry.type === 'reload') isForceReload = true;
 
         const integratePartial = (partial) => {
             let changed = false;
@@ -1580,7 +1617,7 @@
             if (partial && partial.heat && paraDomMap) {
                 for (const [k, lvl] of Object.entries(partial.heat)) {
                     const el = paraDomMap[k];
-                    if (el) setParagraphHeat(el, lvl);
+                    if (el) setParagraphHeat(el, lvl); else console.warn('[Paige] paragraph for heat not found:', k);
                 }
             }
         };
@@ -1591,8 +1628,9 @@
                 const chapters = adapter.collectChapters();
                 if (!chapters.length) {
                     // Fallback: summarize entire page text
+                    console.warn('[Paige] no chapters found, falling back to full text summarize');
                     inc();
-                    await streamSummarize({
+                    await streamSummarize({ force: isForceReload,
                         text: adapter.collectSingleText(), id, chapter: '', source: adapter.source
                     }, integratePartial).finally(() => dec());
                 } else {
@@ -1604,13 +1642,13 @@
                             if (!entry.isIntersecting) return;
                             if (seen.has(article) || processing.has(article)) return;
                             const node = chapters.find(c => c.article === article);
-                            if (!node) return;
+                            if (!node || !node.chapterId) return; // Ensure chapterId exists for prefixing
                             processing.add(article);
-                            const { map: paraMap, dom } = collectParagraphsFromRoot(node.article);
+                            const { map: paraMap, dom } = collectParagraphsFromRoot(node.article, `ch-${node.chapterId}-`); // Prefix with chapter ID
                             Object.assign(paraDomMap, dom);
 
                             inc();
-                            streamSummarize({ heat: paraMap, id, chapter: node.chapterId || '', source: adapter.source }, integratePartial).catch(err => console.warn('[Paige] chapter stream failed:', err))
+                            streamSummarize({ force: isForceReload, paragraphs: paraMap, id, chapter: node.chapterId || '', source: adapter.source }, integratePartial).catch(err => console.warn('[Paige] chapter stream failed:', err))
                                 .finally(() => {
                                     dec();
                                     processing.delete(article);
@@ -1633,7 +1671,7 @@
                 }
 
                 inc();
-                await streamSummarize({ heat: paraMap, id, chapter, source: adapter.source }, integratePartial).catch(err => {
+                await streamSummarize({ force: isForceReload, paragraphs: paraMap, id, chapter, source: adapter.source }, integratePartial).catch(err => {
                     console.error('[Paige] summarize failed:', err);
                     const e = document.createElement('div');
                     e.style.cssText = 'position:fixed;bottom:20px;right:20px;background:crimson;color:#fff;padding:8px 12px;border-radius:8px;z-index:9999;';
