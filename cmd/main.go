@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	_ "github.com/joho/godotenv/autoload"
 	"github.com/labstack/gommon/log"
 
 	"paige/pkg/inference"

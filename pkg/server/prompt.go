@@ -15,7 +15,7 @@ The JSON object must have three root keys: 'characters', 'timeline', and 'heat'.
   * 'species' (optional): Species if explicitly stated or clearly implied.
   * 'personality': A summary of their key personality traits.
   * 'physical_description': An object with keys for 'height', 'build', 'hair', and 'other' details. Do not put 'age' or 'gender' here.
-  * 'sexual_characteristics': An object with keys for 'genitalia', 'penis_length_flaccid', 'penis_length_erect', 'pubic_hair', and 'other'. Mark with an asterisk if it's estimated e.g. 1.5-2 inches*
+  * 'sexual_characteristics': An object with keys for 'genitalia', 'penis_length_flaccid', 'penis_length_erect', 'pubic_hair', and 'other'. Mark with an asterisk if it's estimated e.g. 1.5-2 inches* Mention presence of foreskin or knot or type of genitalia.
   * 'notable_actions': An maximum array of 3-5 of strings listing their most significant events or their character. Avoid small, insignificant actions that do not describe the character or major events.
 
 **Timeline**:

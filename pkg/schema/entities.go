@@ -32,7 +32,7 @@ type PhysicalDescription struct {
 }
 
 type SexualCharacteristics struct {
-	Genitalia          string  `json:"genitalia,omitempty" jsonschema_description:"Genital description if stated or reasonably estimated"`
+	Genitalia          string  `json:"genitalia,omitempty" jsonschema_description:"Genital description if stated or reasonably estimated. Mention presence of foreskin or knot or type of genitalia."`
 	PenisLengthFlaccid *string `json:"penis_length_flaccid,omitempty" jsonschema_description:"Penis length when flaccid if stated or estimated (string to allow ranges/notes) e.g. 1.5-2 inches*"`
 	PenisLengthErect   *string `json:"penis_length_erect,omitempty" jsonschema_description:"Penis length when erect if stated or estimated (string to allow ranges/notes)"`
 	PubicHair          string  `json:"pubic_hair,omitempty" jsonschema_description:"Pubic hair description if stated"`
