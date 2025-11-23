@@ -37,9 +37,9 @@
             const workMatch = location.pathname.match(/\/works\/(\d+)/);
             const workId = workMatch ? workMatch[1] : null;
             if (!workId) return location.pathname; // Fallback
-    
+
             if (isFullWork) return `work:${workId}`;
-    
+
             const chapterMatch = location.pathname.match(/\/chapters\/(\d+)/);
             return chapterMatch ? `work:${workId}:chapter:${chapterMatch[1]}` : `work:${workId}`;
         }
@@ -137,6 +137,35 @@
     }
     .${CLS.panel}:hover, .${CLS.panel}.${CLS.panelPinned} { transform: translateX(0); }
     .${CLS.panel}.${CLS.panelCollapsed} { width: 260px; }
+
+    .${CLS.resizer} {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 12px;
+        cursor: ns-resize;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        background: rgba(0, 0, 0, 0.05);
+    }
+
+    .ao3sn-resizer-side {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      width: 6px;
+      cursor: ew-resize;
+      background: repeating-linear-gradient(
+        90deg,
+        rgba(0,0,0,0.06),
+        rgba(0,0,0,0.06) 4px,
+        rgba(0,0,0,0.12) 4px,
+        rgba(0,0,0,0.12) 8px
+      );
+    }
 
     .${CLS.panelHeader} { display: flex; align-items: center; gap: 8px; padding: 10px; border-bottom: 1px solid #e5e5e5; background: #fff; }
     .${CLS.btn}, .${CLS.iconBtn} { border: 1px solid #ddd; background: #f8f8f8; border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
@@ -384,6 +413,7 @@
      *   timeline: TimelineDay[],
      *   pinnedPanel: boolean,
      *   panelHeight: number,
+     *   panelWidth: number,
      *   povName: string|null,
      *   heat: Record<string, number>=
      * }} Persist
@@ -496,7 +526,7 @@
                 paraDiv.style.marginBottom = '1em';
                 const text = (paraDiv.textContent || '').trim();
                 if (!text) return;
-                
+
                 const key = keyPrefix + String(idx++);
                 map[key] = text;
 
@@ -574,6 +604,7 @@
             timeline: [],
             pinnedPanel: false,
             panelHeight: Math.round(window.innerHeight * 0.6),
+            panelWidth: 360,
             povName: null,
             heat: {}
         };
@@ -903,7 +934,7 @@
         }[c]));
     }
 
-    function renderCharacterDetailsHTML(d) {
+    function renderCharacterDetailsHTML(d, isHovered = false) {
         const aliasChips = (d.aliases || []).map(a => `<span class="${CLS.chip}">${escapeHTML(a)}</span>`).join(' ');
         const pd = d.physical_description || {};
         const sc = d.sexual_characteristics || {};
@@ -924,7 +955,7 @@
         let actsList = '';
         if (actsArr.length) {
             const maxActs = getMaxActionsForScreen();
-            const shown = actsArr.slice(0, maxActs);
+            const shown = isHovered ? actsArr.slice(0, maxActs) : actsArr;
             const extra = actsArr.length - shown.length;
             const items = shown.map(a => `<li>${escapeHTML(a)}</li>`).join('');
             actsList = `<ul style="margin:4px 0 0 16px; padding:0">${items}${extra > 0 ? `<li>… (+${extra} more)</li>` : ''}</ul>`;
@@ -1097,6 +1128,9 @@
         const panel = document.createElement('aside');
         panel.className = CLS.panel + (persist.pinnedPanel ? ` ${CLS.panelPinned}` : '');
         panel.style.height = `${persist.panelHeight}px`;
+        if (persist.panelWidth && Number.isFinite(persist.panelWidth)) {
+            panel.style.width = `${persist.panelWidth}px`;
+        }
         panel.setAttribute('aria-label', 'Paige panel');
 
         const header = document.createElement('div');
@@ -1114,7 +1148,13 @@
         compact.className = CLS.iconBtn;
         compact.textContent = '🗂️ Compact';
         compact.addEventListener('click', () => {
-            panel.classList.toggle(CLS.panelCollapsed);
+            const collapsed = panel.classList.toggle(CLS.panelCollapsed);
+            if (collapsed) {
+                panel.style.width = '260px';
+            } else {
+                const w = persist.panelWidth && Number.isFinite(persist.panelWidth) ? persist.panelWidth : 360;
+                panel.style.width = `${w}px`;
+            }
         });
         const title = document.createElement('div');
         title.style.fontWeight = '700';
@@ -1195,13 +1235,44 @@
 
             function onMove(ev) {
                 const nh = startH + ev.clientY - startY;
-                panel.style.height = `${nh}px`;
+                const minH = 200;
+                const maxH = Math.round(window.innerHeight * 0.9);
+                panel.style.height = `${Math.min(Math.max(nh, minH), maxH)}px`;
             }
 
             function onUp() {
                 document.removeEventListener('mousemove', onMove);
                 document.removeEventListener('mouseup', onUp);
                 persist.panelHeight = panel.offsetHeight;
+                savePersist(persist);
+            }
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+
+        const sideResizer = document.createElement('div');
+        sideResizer.className = 'ao3sn-resizer-side';
+        panel.appendChild(sideResizer);
+
+        sideResizer.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            const startX = e.clientX;
+            const startW = panel.offsetWidth;
+
+            function onMove(ev) {
+                const dx = startX - ev.clientX; // drag left => increase width
+                const raw = startW + dx;
+                const minW = 260;
+                const maxW = Math.round(window.innerWidth * 0.8);
+                const nw = Math.min(Math.max(raw, minW), maxW);
+                panel.style.width = `${nw}px`;
+            }
+
+            function onUp() {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                persist.panelWidth = panel.offsetWidth;
                 savePersist(persist);
             }
 
@@ -1538,7 +1609,7 @@
         span.style.color = data.color;
         span.textContent = original; // includes the possessive
         const dot = makeInfoDot(data.color);
-        dot.addEventListener('mouseenter', () => showTooltip(dot, renderCharacterDetailsHTML(data)));
+        dot.addEventListener('mouseenter', () => showTooltip(dot, renderCharacterDetailsHTML(data, true)));
         dot.addEventListener('mouseleave', () => hideTooltip(dot));
 
         const wrapper = document.createElement('span');
