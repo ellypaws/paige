@@ -20,7 +20,7 @@ type GrokInferencer struct {
 // NewGrokInferencer creates a new inferencer instance using OpenAI client.
 func NewGrokInferencer(apiKey string, model string) *GrokInferencer {
 	if model == "" {
-		model = "grok-4-fast-non-reasoning"
+		model = "grok-4-1-fast-non-reasoning"
 	}
 	client := openai.NewClient(
 		option.WithBaseURL("https://api.x.ai/v1"),

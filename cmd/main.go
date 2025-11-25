@@ -21,10 +21,6 @@ func main() {
 	ctx, done := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
 
 	model := os.Getenv("OPENAI_MODEL")
-	if model == "" {
-		model = "gpt-4o-mini"
-	}
-
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	openAI := inference.NewOpenAIInferencer(apiKey, model)
 	if apiKey == "" {

@@ -21,6 +21,9 @@ type OpenAIInferencer struct {
 // NewOpenAIInferencer creates a new inferencer instance using OpenAI client.
 func NewOpenAIInferencer(apiKey string, model string) *OpenAIInferencer {
 	client := openai.NewClient(option.WithAPIKey(apiKey))
+	if model == "" {
+		model = "gpt-5-nano-2025-08-07"
+	}
 	return &OpenAIInferencer{
 		client: &client,
 		apiKey: apiKey,
