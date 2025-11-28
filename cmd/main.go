@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	logger "github.com/charmbracelet/log"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/labstack/gommon/log"
 
@@ -23,15 +24,25 @@ func main() {
 	model := os.Getenv("OPENAI_MODEL")
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	openAI := inference.NewOpenAIInferencer(apiKey, model)
-	if apiKey == "" {
+	var inf inference.Inferencer
+	if apiKey != "" {
+		inf = openAI
+		logger.Info("Using OpenAI as inferencer")
+	} else if grokKey := os.Getenv("GROK_API_KEY"); grokKey != "" {
+		inf = inference.NewGrokInferencer(grokKey, os.Getenv("GROK_MODEL"))
+		logger.Info("Using Grok as inferencer")
+	} else if geminiKey := os.Getenv("GEMINI_API_KEY"); geminiKey != "" {
+		var err error
+		inf, err = inference.NewGeminiInferencer(geminiKey, os.Getenv("GEMINI_MODEL"))
+		if err != nil {
+			logger.Fatal(err)
+		}
+		logger.Info("Using Gemini as inferencer")
+	} else {
 		openAI.ChangeBaseURL("http://localhost:1234/v1")
 		openAI.SetModel("")
-	}
-	var inf inference.Inferencer = openAI
-
-	grokKey := os.Getenv("GROK_API_KEY")
-	if grokKey != "" {
-		inf = inference.NewGrokInferencer(grokKey, os.Getenv("GROK_MODEL"))
+		inf = openAI
+		logger.Info("Using local LM Studio as inferencer")
 	}
 
 	srv := server.NewServer(ctx, inf)
