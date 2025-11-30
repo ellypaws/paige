@@ -18,6 +18,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/labstack/echo/v4"
+
+	"paige/pkg/pool"
 )
 
 // Logf prints consistent server logs.
@@ -39,6 +41,27 @@ func PrettyJSON(v any) string {
 	return string(data)
 }
 
+type levRows struct {
+	prev []int
+	curr []int
+}
+
+func (l *levRows) Reset() {
+	for i := range l.prev {
+		l.prev[i] = 0
+	}
+	for i := range l.curr {
+		l.curr[i] = 0
+	}
+}
+
+var rowsPool = pool.New(func() *levRows {
+	return &levRows{
+		prev: make([]int, 0, 256),
+		curr: make([]int, 0, 256),
+	}
+})
+
 // Levenshtein returns the edit distance between two strings.
 func Levenshtein(a, b string) int {
 	ar, br := []rune(a), []rune(b)
@@ -50,34 +73,53 @@ func Levenshtein(a, b string) int {
 		return al
 	}
 
-	dist := make([][]int, al+1)
-	for i := range dist {
-		dist[i] = make([]int, bl+1)
+	if bl > al {
+		ar, br = br, ar
+		al, bl = bl, al
 	}
-	for i := 0; i <= al; i++ {
-		dist[i][0] = i
+
+	rows := rowsPool.Get()
+	if cap(rows.prev) < bl+1 {
+		rows.prev = make([]int, bl+1)
+	} else {
+		rows.prev = rows.prev[:bl+1]
 	}
+	if cap(rows.curr) < bl+1 {
+		rows.curr = make([]int, bl+1)
+	} else {
+		rows.curr = rows.curr[:bl+1]
+	}
+
 	for j := 0; j <= bl; j++ {
-		dist[0][j] = j
+		rows.prev[j] = j
 	}
 
 	for i := 1; i <= al; i++ {
+		rows.curr[0] = i
 		for j := 1; j <= bl; j++ {
 			cost := 0
 			if ar[i-1] != br[j-1] {
 				cost = 1
 			}
-			min := dist[i-1][j] + 1
-			if v := dist[i][j-1] + 1; v < min {
-				min = v
+			del := rows.prev[j] + 1
+			ins := rows.curr[j-1] + 1
+			sub := rows.prev[j-1] + cost
+
+			min := del
+			if ins < min {
+				min = ins
 			}
-			if v := dist[i-1][j-1] + cost; v < min {
-				min = v
+			if sub < min {
+				min = sub
 			}
-			dist[i][j] = min
+			rows.curr[j] = min
 		}
+		rows.prev, rows.curr = rows.curr, rows.prev
 	}
-	return dist[al][bl]
+
+	res := rows.prev[bl]
+	rowsPool.Put(rows)
+	return res
 }
 
 // Similarity returns a float between 0 and 1 (1 = identical).
