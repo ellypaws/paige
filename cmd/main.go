@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	logger "github.com/charmbracelet/log"
@@ -72,7 +73,7 @@ func main() {
 
 	addr := ":8080"
 	if envAddr := os.Getenv("PORT"); envAddr != "" {
-		addr = ":" + envAddr
+		addr = ":" + strings.TrimLeft(envAddr, `:`)
 	}
 
 	finishedShutDown := make(chan struct{})
