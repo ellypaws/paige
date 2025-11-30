@@ -230,7 +230,7 @@
       content: "";
       width: 40px;
       height: 3px;
-      border-radius: 25px;
+      border-radius: 999px;
       background: linear-gradient(90deg, rgba(255,255,255,0.35), rgba(255,255,255,0.12));
       box-shadow: 0 1px 2px rgba(0,0,0,0.35);
     }
@@ -313,7 +313,7 @@
       cursor: pointer;
       font-weight: 600;
       opacity: 0.7;
-      border-radius: 999px 999px 0 0;
+      border-radius: 25px 25px 0 0;
       transition: background 160ms ease, opacity 160ms ease;
     }
     .${CLS.tab}.${CLS.tabActive} {
