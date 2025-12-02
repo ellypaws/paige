@@ -36,10 +36,9 @@ func (s *Server) handlePostEdit(c echo.Context) error {
 		log.Warn("invalid JSON in /api/edit", "error", err)
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid json")
 	}
-	req.ID = strings.TrimSpace(req.ID)
-	req.Selection = strings.TrimSpace(req.Selection)
-	req.Prompt = strings.TrimSpace(req.Prompt)
-	req.Rules = strings.TrimSpace(req.Rules)
+	if req.Source != "" && req.ID != "" {
+		req.ID = strings.TrimSpace(req.Source) + ":" + strings.TrimSpace(req.ID)
+	}
 	if req.ID == "" || req.Selection == "" || req.Prompt == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "id, selection, and prompt are required")
 	}
