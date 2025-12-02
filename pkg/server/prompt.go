@@ -1,5 +1,7 @@
 package server
 
+import "strings"
+
 const summarizePrompt = `You are a precise, low-latency character entity extraction system for fictional stories. Your task is to process the provided JSON of numbered paragraphs (e.g., {"1": "First paragraph text", "2": "Second paragraph text"}) and return a single, concise JSON object. Concatenate all paragraphs in order to form the full text for extracting characters and timeline. Evaluate each paragraph individually for heat. Do not add any commentary or markdown formatting to your response.
 
 The JSON object must have three root keys: 'characters', 'timeline', and 'heat'.
