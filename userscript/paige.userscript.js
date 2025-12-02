@@ -1147,9 +1147,15 @@
     function ensureLetterSpans(el) {
         if (el.dataset.letterized === '1') return;
         el.dataset.letterized = '1';
-        const text = el.textContent;
+        const text = el.textContent || '';
         el.textContent = '';
+
         for (const ch of text) {
+            // Preserve spaces / whitespace as normal text so word spacing stays intact
+            if (ch.trim() === '') {
+                el.appendChild(document.createTextNode(ch));
+                continue;
+            }
             const s = document.createElement('span');
             s.className = CLS.letter;
             s.textContent = ch;
