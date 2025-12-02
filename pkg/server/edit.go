@@ -26,7 +26,7 @@ type editReq struct {
 }
 
 const (
-	maxEditSelectionRunes = 8192
+	maxEditSelectionRunes = 8192 * 4
 	maxEditHistoryEntries = 50
 )
 
