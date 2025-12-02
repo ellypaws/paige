@@ -8,6 +8,18 @@ type Summary struct {
 	Heat     map[string]float64 `json:"heat,omitempty" jsonschema_description:"Mapping of paragraph (starting from 1) with a level of 0-3 based on sexual activity intensity"`
 
 	StoredHeat map[string]map[string]float64 `json:"stored_heat,omitempty" jsonschema_description:"Backend storage of heat maps per chapter ID"`
+	Edits      map[string][]EditHistoryEntry `json:"edits,omitempty" jsonschema_description:"Manual edit history keyed by chapter ID"`
+}
+
+type EditHistoryEntry struct {
+	ID            string   `json:"id" jsonschema_description:"Unique identifier for this edit entry"`
+	Chapter       string   `json:"chapter,omitempty" jsonschema_description:"Chapter ID the edit belongs to"`
+	Prompt        string   `json:"prompt" jsonschema_description:"User-provided edit prompt/instructions"`
+	Rules         string   `json:"rules" jsonschema_description:"Rule block applied during the edit"`
+	Original      string   `json:"original" jsonschema_description:"Original selection text before editing"`
+	Result        string   `json:"result" jsonschema_description:"Model output after applying the edit"`
+	ParagraphKeys []string `json:"paragraph_keys,omitempty" jsonschema_description:"Paragraph identifiers associated with the selection"`
+	CreatedAt     string   `json:"created_at" jsonschema_description:"RFC3339 timestamp when the edit was generated"`
 }
 
 type Character struct {

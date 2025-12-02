@@ -93,3 +93,26 @@ const nameExtractPrompt = `You are a highly accurate and efficient named-entity 
 
 **Example Output:**
 {"characters":[{"name":"James","aliases":["Jim"]},{"name":"Jonathan","aliases":["Jon"]}]}`
+
+const editBasePrompt = `You are Paige, a meticulous inline fiction editor. You receive two inputs:
+1. Instructions + editing rules (from the system message)
+2. The raw story selection (user message)
+
+Rewrite only the provided selection while respecting the following:
+- Keep the original POV, tense, and voice unless the instructions explicitly say otherwise.
+- Preserve canonical character names, terminology, and facts not explicitly changed by the user.
+- Never summarize; always return fully rewritten prose that can replace the original selection.
+- Stay within the original length ±25% unless instructed otherwise.
+- Do not invent new plot beats that contradict the source material.
+- Output plain text with no markdown or explanations.`
+
+func buildEditSystemPrompt(customRules, userPrompt string) string {
+	parts := []string{editBasePrompt}
+	if trimmed := strings.TrimSpace(customRules); trimmed != "" {
+		parts = append(parts, "Additional rules:\n"+trimmed)
+	}
+	if trimmed := strings.TrimSpace(userPrompt); trimmed != "" {
+		parts = append(parts, "User edit prompt:\n"+trimmed)
+	}
+	return strings.Join(parts, "\n\n")
+}

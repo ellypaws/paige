@@ -87,6 +87,21 @@ func (o *OpenAIInferencer) Infer(ctx context.Context, params *openai.ChatComplet
 	return resp.Choices[0].Message.Content, nil
 }
 
+// Edit runs the model with editing defaults (lower temperature / max tokens) while
+// ensuring only the story content is sent as the user message.
+func (o *OpenAIInferencer) Edit(ctx context.Context, params *openai.ChatCompletionNewParams, system, user string) (string, error) {
+	if params == nil {
+		params = new(openai.ChatCompletionNewParams)
+	}
+	if params.MaxCompletionTokens.Value == 0 {
+		params.MaxCompletionTokens = openai.Int(int64(len(user) * 2))
+	}
+	if params.Temperature.Value == 0 {
+		params.Temperature = openai.Float(0.2)
+	}
+	return o.Infer(ctx, params, system, user)
+}
+
 // Verify checks that the result is non-empty or conforms to minimal expectations.
 // You could extend this with an OpenAI-based validation or JSON schema.
 func (o *OpenAIInferencer) Verify(ctx context.Context, result string) (bool, error) {

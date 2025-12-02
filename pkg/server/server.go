@@ -46,6 +46,7 @@ func (s *Server) registerRoutes() {
 	api := s.Echo.Group("/api")
 	api.POST("/names", s.handlePostNames)         // name detection -> []schema.Character (Name only required)
 	api.POST("/summarize", s.handlePostSummarize) // extend/merge details -> []schema.Character
+	api.POST("/edit", s.handlePostEdit)           // inline story edits
 
 	// optional: serve the userscript for @require http://localhost:8080/userscript
 	s.Echo.GET("/userscript", s.handleGetUserscript)

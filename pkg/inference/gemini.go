@@ -48,7 +48,7 @@ func (o *GeminiInferencer) Infer(ctx context.Context, params *openai.ChatComplet
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: genai.NewContentFromText(system, genai.RoleModel),
 		ResponseMIMEType:  "application/json",
-		MaxOutputTokens:   int32(params.MaxCompletionTokens.Value),
+		MaxOutputTokens:   int32(cmp.Or(params.MaxCompletionTokens.Value, 4096)),
 	}
 
 	result, err := o.client.Models.GenerateContent(
@@ -62,6 +62,17 @@ func (o *GeminiInferencer) Infer(ctx context.Context, params *openai.ChatComplet
 	}
 
 	return result.Text(), nil
+}
+
+// Edit mirrors Infer but allows the caller to provide editing-specific defaults.
+func (o *GeminiInferencer) Edit(ctx context.Context, params *openai.ChatCompletionNewParams, system, user string) (string, error) {
+	if params == nil {
+		params = new(openai.ChatCompletionNewParams)
+	}
+	if params.MaxCompletionTokens.Value == 0 {
+		params.MaxCompletionTokens = openai.Int(int64(len(user) * 2))
+	}
+	return o.Infer(ctx, params, system, user)
 }
 
 // Verify checks that the result is non-empty or conforms to minimal expectations.

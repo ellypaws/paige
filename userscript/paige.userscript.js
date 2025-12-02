@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AO3/Inkbunny Smart Name Highlighter + Pronoun Colorizer (SSE, Timeline, Aliases)
 // @namespace    ao3-inkbunny-smart-names
-// @version      1.7.0
+// @version      1.8.0
 // @description  Highlight names & pronouns on AO3 and Inkbunny. Streams /api/summarize (SSE), updates on EVERY event, canonical alias merging, side panel + timeline, and tooltip truncation of notable actions only.
 // @author       you
 // @match        https://archiveofourown.org/works/*
@@ -22,9 +22,16 @@
 
     /** Backend endpoints */
     const SUMMARIZE_URL = 'http://localhost:8080/api/summarize';
+    const EDIT_URL = 'http://localhost:8080/api/edit';
 
     /** Pronouns to colorize (case-insensitive word matches). */
     const PRONOUNS = ['he', 'him', 'his', 'himself', 'she', 'her', 'hers', 'herself', 'they', 'them', 'their', 'theirs', 'themself', 'themselves', 'xe', 'xem', 'xyr', 'xyrs', 'xemself', 'ze', 'zir', 'zirs', 'zirself', 'fae', 'faer', 'faers', 'faerself', 'it', 'its', 'itself'];
+
+    const DEFAULT_EDIT_RULES = `Keep POV, tense, and narrative voice unless I explicitly ask for a change.
+    Preserve canonical names, relationship dynamics, and plot beats unless overwritten.
+    Stay within 25% of the original length and keep the same paragraph count when practical.
+    Remove decorative heat markers like 🔥 as this is not part of the story.
+    Return only the rewritten prose—no commentary, markdown, or explanations.`;
 
     /** Mentions heuristics for major/minor classification. */
     const MIN_MAJOR_MENTIONS = 6;
@@ -49,6 +56,30 @@
     const LS_KEY = `ao3-smart-names:v1:${location.hostname}:${WORK_ID}`;
 
     /** CSS class names used by the script. */
+    const FIRE_EMOJI_RX = /\u{1F525}/gu;
+
+    function stripHeatEmojis(text) {
+        if (typeof text !== 'string' || text === '') return text || '';
+        FIRE_EMOJI_RX.lastIndex = 0;
+        return text.replace(FIRE_EMOJI_RX, '');
+    }
+
+    function sanitizeTextareaValue(el, sanitizer = stripHeatEmojis) {
+        if (!el || typeof el.value !== 'string') return '';
+        const raw = el.value;
+        const cleaned = sanitizer(raw);
+        if (raw === cleaned) return cleaned;
+        const start = Number.isInteger(el.selectionStart) ? el.selectionStart : raw.length;
+        const end = Number.isInteger(el.selectionEnd) ? el.selectionEnd : raw.length;
+        const cleanStart = sanitizer(raw.slice(0, start)).length;
+        const cleanEnd = sanitizer(raw.slice(0, end)).length;
+        el.value = cleaned;
+        if (typeof el.setSelectionRange === 'function') {
+            el.setSelectionRange(cleanStart, cleanEnd);
+        }
+        return cleaned;
+    }
+
     const CLS = {
         name: 'ao3sn-name',
         pronoun: 'ao3sn-pronoun',
@@ -60,6 +91,7 @@
         panel: 'ao3sn-panel',
         panelPinned: 'ao3sn-panel-pinned',
         panelCollapsed: 'ao3sn-panel-collapsed',
+        panelFullscreen: 'ao3sn-panel-fullscreen',
         panelHeader: 'ao3sn-panel-header',
         throbber: 'ao3sn-throbber',
         btn: 'ao3sn-btn',
@@ -70,6 +102,19 @@
         tab: 'ao3sn-tab',
         tabActive: 'ao3sn-tab-active',
         section: 'ao3sn-section',
+        editBox: 'ao3sn-edit-box',
+        editTextarea: 'ao3sn-edit-textarea',
+        editHistory: 'ao3sn-edit-history',
+        editHistoryItem: 'ao3sn-edit-history-item',
+        editHistoryMeta: 'ao3sn-edit-history-meta',
+        editResult: 'ao3sn-edit-result',
+        editControls: 'ao3sn-edit-controls',
+        editFab: 'ao3sn-edit-fab',
+        editBadge: 'ao3sn-edit-badge',
+        editEmpty: 'ao3sn-edit-empty',
+        editToolbar: 'ao3sn-edit-toolbar',
+        editHistoryWrap: 'ao3sn-edit-history-wrap',
+        editHistoryActions: 'ao3sn-edit-history-actions',
         list: 'ao3sn-list',
         listMinor: 'ao3sn-list-minor',
         card: 'ao3sn-card',
@@ -181,9 +226,22 @@
     .${CLS.panel}.${CLS.panelPinned} {
       transform: translateX(0);
     }
-    .${CLS.panel}.${CLS.panelCollapsed} {
-      width: 260px;
-    }
+        .${CLS.panel}.${CLS.panelCollapsed} {
+            width: 260px;
+        }
+
+        .${CLS.panel}.${CLS.panelFullscreen} {
+            position: fixed;
+            top: 0;
+            right: 0;
+            left: 0;
+            width: 100vw !important;
+            height: 100vh !important;
+            max-height: none;
+            border-radius: 0;
+            transform: none;
+            z-index: 9999;
+        }
 
     .${CLS.panelHeader} {
       display: flex;
@@ -299,20 +357,23 @@
       opacity: 0.95;
     }
 
-    /* Tabs + manual box */
+        /* Tabs + manual box */
 
-    .${CLS.tabs} {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      border-bottom: 1px solid rgba(255,255,255,0.12);
-      background: linear-gradient(90deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
-    }
+        .${CLS.tabs} {
+            display: flex;
+            flex-wrap: wrap;
+            border-bottom: 1px solid rgba(255,255,255,0.12);
+            background: linear-gradient(90deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+        }
     .${CLS.tab} {
       padding: 8px 10px;
       text-align: center;
       cursor: pointer;
       font-weight: 600;
       opacity: 0.7;
+      flex: 1 1 140px;
+      min-width: 120px;
+      white-space: nowrap;
       border-radius: 25px 25px 0 0;
       transition: background 160ms ease, opacity 160ms ease;
     }
@@ -342,6 +403,125 @@
     }
     .${CLS.manualBox} input::placeholder {
       color: rgba(245,245,255,0.6);
+    }
+
+    .${CLS.editBox} {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.12);
+        background: rgba(255,255,255,0.03);
+    }
+    .${CLS.editTextarea} {
+        width: 100%;
+        min-height: 70px;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.25);
+        background: rgba(0,0,0,0.3);
+        color: #f5f5ff;
+        padding: 8px;
+        font-size: 13px;
+        resize: vertical;
+    }
+    .${CLS.editTextarea}[readonly] {
+        opacity: 0.85;
+    }
+    .${CLS.editControls} {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        justify-content: flex-end;
+    }
+    .${CLS.editResult} {
+        min-height: 90px;
+        border-radius: 10px;
+        border: 1px dashed rgba(255,255,255,0.2);
+        padding: 10px;
+        background: rgba(0,0,0,0.25);
+        font-size: 13px;
+        white-space: pre-wrap;
+        line-height: 1.45;
+    }
+    .${CLS.editHistoryWrap} {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        border-top: 1px solid rgba(255,255,255,0.08);
+    }
+    .${CLS.editToolbar} {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.12);
+        background: rgba(255,255,255,0.03);
+    }
+    .${CLS.editHistory} {
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        overflow: auto;
+    }
+    .${CLS.editHistoryItem} {
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.18);
+        padding: 10px;
+        background: linear-gradient(135deg, rgba(20,25,60,0.55), rgba(10,10,20,0.4));
+        box-shadow: 0 12px 24px rgba(0,0,0,0.3);
+    }
+    .${CLS.editHistoryMeta} {
+        font-size: 11px;
+        opacity: 0.75;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 6px;
+    }
+    .${CLS.editHistoryActions} {
+        margin-left: auto;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+    }
+    .${CLS.editHistoryItem} pre {
+        margin: 0;
+        font-size: 12px;
+        white-space: pre-wrap;
+    }
+    .${CLS.editBadge} {
+        display: inline-block;
+        padding: 2px 6px;
+        border-radius: 6px;
+        border: 1px solid rgba(255,255,255,0.25);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+    .${CLS.editEmpty} {
+        font-size: 12px;
+        opacity: 0.75;
+        text-align: center;
+        padding: 16px;
+    }
+
+    .${CLS.editFab} {
+        position: absolute;
+        z-index: 9999;
+        display: none;
+        padding: 8px 12px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.45);
+        background: linear-gradient(135deg, rgba(20,20,40,0.9), rgba(60,60,120,0.85));
+        color: #fff;
+        font-size: 12px;
+        cursor: pointer;
+        box-shadow: 0 12px 30px rgba(0,0,0,0.45);
     }
 
     /* Main lists */
@@ -664,14 +844,35 @@
 
     /**
      * @typedef {{
+     *   id: string,
+     *   chapter: string,
+     *   prompt: string,
+     *   rules: string,
+     *   original: string,
+     *   result: string,
+     *   created_at: string,
+     *   paragraph_keys?: string[]
+     * }} EditHistoryEntry
+     */
+
+    /**
+     * @typedef {{
      *   characters: Record<string, ({color:string, mentions:number} & CharacterData)>,
      *   pronouns: Record<string, {color:string}>,
      *   timeline: TimelineDay[],
-     *   pinnedPanel: boolean,
+    *   pinnedPanel: boolean,
+    *   fullscreenPanel: boolean,
      *   panelHeight: number,
      *   panelWidth: number,
      *   povName: string|null,
      *   heat: Record<string, number>=
+    *   edits?: {
+    *     rules: string,
+    *     lastPrompt: string,
+    *     draftSelection: string,
+    *     lastResult: string,
+    *     historyByChapter: Record<string, EditHistoryEntry[]>
+    *   }
      * }} Persist
      */
 
@@ -859,10 +1060,18 @@
             pronouns: {},
             timeline: [],
             pinnedPanel: false,
+            fullscreenPanel: false,
             panelHeight: Math.round(window.innerHeight * 0.6),
             panelWidth: 360,
             povName: null,
-            heat: {}
+            heat: {},
+            edits: {
+                rules: DEFAULT_EDIT_RULES,
+                lastPrompt: '',
+                draftSelection: '',
+                lastResult: '',
+                historyByChapter: {}
+            }
         };
         try {
             const raw = localStorage.getItem(LS_KEY);
@@ -873,7 +1082,16 @@
                 characters: parsed.characters || {},
                 pronouns: parsed.pronouns || {},
                 timeline: parsed.timeline || [],
-                heat: parsed.heat || {}
+                heat: parsed.heat || {},
+                pinnedPanel: typeof parsed.pinnedPanel === 'boolean' ? parsed.pinnedPanel : false,
+                fullscreenPanel: typeof parsed.fullscreenPanel === 'boolean' ? parsed.fullscreenPanel : false,
+                edits: {
+                    rules: (parsed.edits && parsed.edits.rules) || DEFAULT_EDIT_RULES,
+                    lastPrompt: (parsed.edits && parsed.edits.lastPrompt) || '',
+                    draftSelection: (parsed.edits && parsed.edits.draftSelection) || '',
+                    lastResult: (parsed.edits && parsed.edits.lastResult) || '',
+                    historyByChapter: (parsed.edits && parsed.edits.historyByChapter) || {}
+                }
             };
             for (const v of Object.values(out.characters)) {
                 if (v && 'avatar' in v) delete v.avatar;
@@ -899,6 +1117,15 @@
         }
         if (persist.timeline && persist.timeline.length > 50) persist.timeline = persist.timeline.slice(-50);
         if (persist.heat && Object.keys(persist.heat).length > 2000) persist.heat = {};
+        if (persist.edits && persist.edits.historyByChapter) {
+            for (const key of Object.keys(persist.edits.historyByChapter)) {
+                const list = persist.edits.historyByChapter[key] || [];
+                if (list.length > 30) persist.edits.historyByChapter[key] = list.slice(0, 30);
+            }
+            if (persist.edits.lastResult && persist.edits.lastResult.length > 2000) {
+                persist.edits.lastResult = persist.edits.lastResult.slice(0, 2000) + '…';
+            }
+        }
     }
 
     /** Writes persist safely; prunes on QuotaExceededError. */
@@ -1054,6 +1281,27 @@
         await readSSE(res.body, ({ event, data }) => {
             if ((event === 'data' || event === 'done') && data) onUpdate(data);
         });
+    }
+
+    async function requestEdit({ selection, prompt, rules, paragraphKeys, chapter }) {
+        const payload = {
+            id: currentWorkId || WORK_ID,
+            chapter: chapter ?? (currentChapterId || ''),
+            selection,
+            prompt,
+            rules,
+            paragraph_keys: paragraphKeys || [],
+            source: adapter.source,
+        };
+        const res = await fetch(EDIT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+            throw new Error(`Edit error: ${res.status}`);
+        }
+        return res.json();
     }
 
     /** ---------------------------------------
@@ -1372,6 +1620,12 @@
     throbber.textContent = 'Analyzing story';
     document.body.appendChild(throbber);
 
+    const selectionFab = document.createElement('button');
+    selectionFab.className = CLS.editFab;
+    selectionFab.textContent = 'Edit selection';
+    selectionFab.style.display = 'none';
+    document.body.appendChild(selectionFab);
+
     function setThrobber(on) {
         throbber.style.display = on ? 'block' : 'none';
     }
@@ -1386,13 +1640,92 @@
         if (!inflight) setThrobber(false);
     };
 
+    const wrapTargets = () => adapter.findWrapTargets();
+
+    function hideSelectionFab() {
+        selectionFab.style.display = 'none';
+    }
+
+    function collectSelectionKeys(range) {
+        const keys = new Set();
+        document.querySelectorAll('.ao3sn-para').forEach(para => {
+            try {
+                if (range.intersectsNode(para) && para.dataset.sectionKey) {
+                    keys.add(para.dataset.sectionKey);
+                }
+            } catch { /* ignore */ }
+        });
+        return Array.from(keys).sort((a, b) => Number(a) - Number(b));
+    }
+
+    function deriveChapterFromKeys(keys) {
+        if (!Array.isArray(keys) || !keys.length) return '';
+        const first = keys[0];
+        if (!first) return '';
+        const match = first.match(/^ch-(\d+)-/);
+        return match ? match[1] : '';
+    }
+
+    function withinStoryContainers(node) {
+        if (!node) return false;
+        return wrapTargets().some(root => root.contains(node instanceof Node ? node : node.parentNode));
+    }
+
+    function handleSelectionChange() {
+        const sel = window.getSelection();
+        if (!sel || sel.isCollapsed) {
+            hideSelectionFab();
+            pendingSelection = null;
+            return;
+        }
+        const cleaned = stripHeatEmojis(sel.toString() || '');
+        const text = cleaned.trim();
+        if (!text || text.length < 4) {
+            hideSelectionFab();
+            pendingSelection = null;
+            return;
+        }
+        const range = sel.getRangeAt(0).cloneRange();
+        if (!withinStoryContainers(range.commonAncestorContainer)) {
+            hideSelectionFab();
+            pendingSelection = null;
+            return;
+        }
+        const rect = range.getBoundingClientRect();
+        selectionFab.style.top = `${window.scrollY + rect.top - 36}px`;
+        selectionFab.style.left = `${window.scrollX + rect.left}px`;
+        selectionFab.style.display = 'block';
+        const keys = collectSelectionKeys(range);
+        const chapterFromSelection = deriveChapterFromKeys(keys);
+        pendingSelection = { text, keys, chapter: chapterFromSelection || currentChapterId || '' };
+    }
+
+    document.addEventListener('mouseup', () => setTimeout(handleSelectionChange, 0));
+    document.addEventListener('keyup', (ev) => {
+        if (ev.key === 'Escape') {
+            hideSelectionFab();
+            pendingSelection = null;
+            return;
+        }
+        setTimeout(handleSelectionChange, 0);
+    });
+
+    selectionFab.addEventListener('click', () => {
+        if (pendingSelection && editUI && typeof editUI.applySelection === 'function') {
+            editUI.applySelection(pendingSelection);
+        }
+        hideSelectionFab();
+    });
+
     function buildPanel() {
         const panel = document.createElement('aside');
         panel.className = CLS.panel + (persist.pinnedPanel ? ` ${CLS.panelPinned}` : '');
-        panel.style.height = `${persist.panelHeight}px`;
-        if (persist.panelWidth && Number.isFinite(persist.panelWidth)) {
-            panel.style.width = `${persist.panelWidth}px`;
-        }
+        let defaultHeight = Number.isFinite(persist.panelHeight) ? persist.panelHeight : Math.round(window.innerHeight * 0.6);
+        let defaultWidth = Number.isFinite(persist.panelWidth) ? persist.panelWidth : 360;
+        if (!Number.isFinite(persist.panelHeight)) persist.panelHeight = defaultHeight;
+        if (!Number.isFinite(persist.panelWidth)) persist.panelWidth = defaultWidth;
+        panel.style.height = `${defaultHeight}px`;
+        panel.style.width = `${defaultWidth}px`;
         panel.setAttribute('aria-label', 'Paige panel');
 
         const header = document.createElement('div');
@@ -1410,6 +1743,7 @@
         compact.className = CLS.iconBtn;
         compact.textContent = '🗂️ Compact';
         compact.addEventListener('click', () => {
+            if (persist.fullscreenPanel) return;
             const collapsed = panel.classList.toggle(CLS.panelCollapsed);
             if (collapsed) {
                 panel.style.width = '260px';
@@ -1418,10 +1752,43 @@
                 panel.style.width = `${w}px`;
             }
         });
+        const fullscreenBtn = document.createElement('button');
+        fullscreenBtn.className = CLS.iconBtn;
+        fullscreenBtn.title = 'Expand panel';
+
+        const applyFullscreenState = () => {
+            const isFull = Boolean(persist.fullscreenPanel);
+            panel.classList.remove(CLS.panelCollapsed);
+            panel.classList.toggle(CLS.panelFullscreen, isFull);
+            fullscreenBtn.textContent = isFull ? '🗗 Window' : '⛶ Fullscreen';
+            fullscreenBtn.title = isFull ? 'Exit fullscreen view' : 'Expand panel';
+            fullscreenBtn.setAttribute('aria-pressed', isFull ? 'true' : 'false');
+            if (isFull) {
+                panel.style.height = '100vh';
+                panel.style.width = '100vw';
+            } else {
+                const h = Number.isFinite(persist.panelHeight) ? persist.panelHeight : defaultHeight;
+                const w = Number.isFinite(persist.panelWidth) ? persist.panelWidth : defaultWidth;
+                panel.style.height = `${h}px`;
+                panel.style.width = `${w}px`;
+                panel.classList.remove(CLS.panelCollapsed);
+            }
+        };
+
+        fullscreenBtn.addEventListener('click', () => {
+            if (!persist.fullscreenPanel) {
+                persist.panelWidth = panel.offsetWidth;
+                persist.panelHeight = panel.offsetHeight;
+            }
+            persist.fullscreenPanel = !persist.fullscreenPanel;
+            applyFullscreenState();
+            savePersistSafe(persist);
+        });
         const title = document.createElement('div');
         title.style.fontWeight = '700';
         title.textContent = adapter.name;
-        header.append(pin, compact, title);
+        header.append(pin, compact, fullscreenBtn, title);
+        applyFullscreenState();
 
         const tabs = document.createElement('div');
         tabs.className = CLS.tabs;
@@ -1431,7 +1798,10 @@
         const tabTL = document.createElement('div');
         tabTL.className = CLS.tab;
         tabTL.textContent = 'Timeline';
-        tabs.append(tabChars, tabTL);
+        const tabEdits = document.createElement('div');
+        tabEdits.className = CLS.tab;
+        tabEdits.textContent = 'Edits';
+        tabs.append(tabChars, tabTL, tabEdits);
 
         const manual = document.createElement('div');
         manual.className = CLS.manualBox;
@@ -1471,26 +1841,282 @@
         tlRoot.className = CLS.list;
         sectionTL.append(tlRoot);
 
+        const sectionEdit = document.createElement('div');
+        sectionEdit.className = CLS.section;
+        sectionEdit.style.display = 'none';
+
+        const editBox = document.createElement('div');
+        editBox.className = CLS.editBox;
+
+        const selectionInput = document.createElement('textarea');
+        selectionInput.className = CLS.editTextarea;
+        selectionInput.placeholder = 'Highlight story text or paste a section here…';
+        const initialDraft = stripHeatEmojis(persist.edits.draftSelection || '');
+        selectionInput.value = initialDraft;
+        if (initialDraft !== (persist.edits.draftSelection || '')) {
+            persist.edits.draftSelection = initialDraft;
+            scheduleSave();
+        }
+
+        const promptInput = document.createElement('textarea');
+        promptInput.className = CLS.editTextarea;
+        promptInput.placeholder = 'Describe the edit you want…';
+        promptInput.value = persist.edits.lastPrompt || '';
+
+        const rulesInput = document.createElement('textarea');
+        rulesInput.className = CLS.editTextarea;
+        rulesInput.placeholder = 'Editing rules (optional)';
+        rulesInput.value = persist.edits.rules || DEFAULT_EDIT_RULES;
+
+        const editControls = document.createElement('div');
+        editControls.className = CLS.editControls;
+        const clearBtn = document.createElement('button');
+        clearBtn.className = CLS.iconBtn;
+        clearBtn.textContent = 'Clear selection';
+        const sendBtn = document.createElement('button');
+        sendBtn.className = CLS.btn;
+        sendBtn.textContent = 'Send edit';
+        editControls.append(clearBtn, sendBtn);
+
+        const resultBox = document.createElement('div');
+        resultBox.className = CLS.editResult;
+        resultBox.textContent = persist.edits.lastResult || 'Edited text will appear here.';
+
+        editBox.append(selectionInput, promptInput, rulesInput, editControls, resultBox);
+        const historyWrap = document.createElement('div');
+        historyWrap.className = CLS.editHistoryWrap;
+
+        const historyToolbar = document.createElement('div');
+        historyToolbar.className = CLS.editToolbar;
+        const historyLabel = document.createElement('div');
+        historyLabel.style.fontWeight = '600';
+        historyLabel.textContent = 'History';
+        const historyMeta = document.createElement('span');
+        historyMeta.style.cssText = 'font-size:11px;opacity:0.75;margin-left:6px;';
+        historyLabel.appendChild(historyMeta);
+
+        const historyToolbarActions = document.createElement('div');
+        historyToolbarActions.style.display = 'flex';
+        historyToolbarActions.style.gap = '8px';
+
+        const clearHistoryBtn = document.createElement('button');
+        clearHistoryBtn.className = CLS.iconBtn;
+        clearHistoryBtn.textContent = 'Clear history';
+        historyToolbarActions.append(clearHistoryBtn);
+
+        historyToolbar.append(historyLabel, historyToolbarActions);
+
+        const historyRoot = document.createElement('div');
+        historyRoot.className = CLS.editHistory;
+
+        historyWrap.append(historyToolbar, historyRoot);
+        sectionEdit.append(editBox, historyWrap);
+
+        const syncSelectionDraft = debounce(() => {
+            persist.edits.draftSelection = selectionInput.value;
+            scheduleSave();
+        }, 250);
+        selectionInput.addEventListener('input', () => {
+            sanitizeTextareaValue(selectionInput);
+            syncSelectionDraft();
+        });
+        promptInput.addEventListener('input', () => {
+            persist.edits.lastPrompt = promptInput.value;
+            scheduleSave();
+        });
+        rulesInput.addEventListener('input', () => {
+            persist.edits.rules = rulesInput.value || DEFAULT_EDIT_RULES;
+            scheduleSave();
+        });
+        clearBtn.addEventListener('click', () => {
+            selectionInput.value = '';
+            persist.edits.draftSelection = '';
+            pendingSelection = null;
+            scheduleSave();
+        });
+
+        const clearHistoryForActiveChapter = () => {
+            const chapterKey = currentChapterId || '';
+            if (!persist.edits.historyByChapter || !Array.isArray(persist.edits.historyByChapter[chapterKey]) || !persist.edits.historyByChapter[chapterKey].length) {
+                return false;
+            }
+            persist.edits.historyByChapter[chapterKey] = [];
+            scheduleSave();
+            return true;
+        };
+
+        const deleteHistoryEntryAt = (index) => {
+            const chapterKey = currentChapterId || '';
+            if (!persist.edits.historyByChapter || !Array.isArray(persist.edits.historyByChapter[chapterKey])) return false;
+            const list = persist.edits.historyByChapter[chapterKey];
+            if (index < 0 || index >= list.length) return false;
+            list.splice(index, 1);
+            scheduleSave();
+            return true;
+        };
+
+        clearHistoryBtn.addEventListener('click', () => {
+            if (clearHistoryBtn.disabled) return;
+            if (clearHistoryForActiveChapter()) {
+                renderEditHistory();
+            }
+        });
+
+        const setEditLoading = (busy) => {
+            sendBtn.disabled = busy;
+            sendBtn.textContent = busy ? 'Sending…' : 'Send edit';
+        };
+
+        const renderEditHistory = () => {
+            historyRoot.innerHTML = '';
+            const chapterKey = currentChapterId || '';
+            const entries = (persist.edits.historyByChapter && persist.edits.historyByChapter[chapterKey]) || [];
+            const countLabel = entries.length ? `${entries.length} edit${entries.length === 1 ? '' : 's'}` : 'No edits yet';
+            historyMeta.textContent = `(${countLabel})`;
+            clearHistoryBtn.disabled = entries.length === 0;
+            if (!entries.length) {
+                const empty = document.createElement('div');
+                empty.className = CLS.editEmpty;
+                empty.textContent = 'No edits yet for this chapter.';
+                historyRoot.appendChild(empty);
+                return;
+            }
+            entries.forEach((entry, idx) => {
+                const card = document.createElement('div');
+                card.className = CLS.editHistoryItem;
+
+                const meta = document.createElement('div');
+                meta.className = CLS.editHistoryMeta;
+                let when = 'just now';
+                if (entry.created_at) {
+                    const t = new Date(entry.created_at);
+                    when = Number.isNaN(t.getTime()) ? entry.created_at : t.toLocaleString();
+                }
+                const promptSpan = document.createElement('span');
+                promptSpan.textContent = entry.prompt || 'Prompt';
+                const badge = document.createElement('span');
+                badge.className = CLS.editBadge;
+                badge.textContent = entry.chapter ? `Chapter ${entry.chapter}` : 'Story';
+                const whenSpan = document.createElement('span');
+                whenSpan.textContent = when;
+                meta.append(promptSpan, badge, whenSpan);
+
+                const actions = document.createElement('div');
+                actions.className = CLS.editHistoryActions;
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = CLS.iconBtn;
+                deleteBtn.textContent = 'Delete';
+                deleteBtn.title = 'Remove this edit entry';
+                deleteBtn.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    if (deleteHistoryEntryAt(idx)) {
+                        renderEditHistory();
+                    }
+                });
+                actions.append(deleteBtn);
+                meta.appendChild(actions);
+                card.appendChild(meta);
+
+                const original = document.createElement('pre');
+                original.textContent = entry.original || '';
+                original.style.opacity = '0.7';
+                card.appendChild(original);
+
+                const divider = document.createElement('div');
+                divider.style.cssText = 'height:1px;background:rgba(255,255,255,0.15);margin:6px 0;';
+                card.appendChild(divider);
+
+                const result = document.createElement('pre');
+                result.textContent = entry.result || '';
+                card.appendChild(result);
+
+                historyRoot.appendChild(card);
+            });
+        };
+
+        async function sendEditFromPanel() {
+            const sanitizedSelection = stripHeatEmojis(selectionInput.value || '');
+            if (sanitizedSelection !== selectionInput.value) {
+                selectionInput.value = sanitizedSelection;
+                persist.edits.draftSelection = sanitizedSelection;
+                scheduleSave();
+            }
+            const selection = sanitizedSelection.trim();
+            const promptText = promptInput.value.trim();
+            const rulesText = rulesInput.value.trim();
+            if (!selection) {
+                resultBox.textContent = 'Select or paste some story text first.';
+                return;
+            }
+            if (!promptText) {
+                resultBox.textContent = 'Add an edit prompt describing the change.';
+                return;
+            }
+            if (!currentWorkId) {
+                resultBox.textContent = 'Work ID not ready yet.';
+                return;
+            }
+
+            setEditLoading(true);
+            try {
+                const payload = await requestEdit({
+                    selection,
+                    prompt: promptText,
+                    rules: rulesText,
+                    paragraphKeys: pendingSelection?.keys || [],
+                    chapter: pendingSelection?.chapter,
+                });
+                resultBox.textContent = payload.result || 'No content returned.';
+                persist.edits.lastResult = payload.result || '';
+                persist.edits.lastPrompt = promptInput.value;
+                persist.edits.rules = rulesInput.value;
+                const chapterKey = (payload.chapter ?? pendingSelection?.chapter ?? currentChapterId) || '';
+                if (payload.history) {
+                    persist.edits.historyByChapter[chapterKey] = payload.history;
+                } else if (payload.entry) {
+                    const existing = persist.edits.historyByChapter[chapterKey] || [];
+                    persist.edits.historyByChapter[chapterKey] = [payload.entry, ...existing].slice(0, 50);
+                }
+                pendingSelection = null;
+                scheduleSave();
+                renderEditHistory();
+            } catch (err) {
+                console.warn('[Paige] edit request failed', err);
+                resultBox.textContent = `Edit failed: ${err?.message || err}`;
+            } finally {
+                setEditLoading(false);
+            }
+        }
+
+        sendBtn.addEventListener('click', () => {
+            if (sendBtn.disabled) return;
+            sendEditFromPanel();
+        });
+
         const resizer = document.createElement('div');
         resizer.className = CLS.resizer;
 
-        panel.append(header, tabs, manual, sectionChars, sectionTL, resizer);
+        panel.append(header, tabs, manual, sectionChars, sectionTL, sectionEdit, resizer);
         document.body.appendChild(panel);
 
-        tabChars.addEventListener('click', () => {
-            tabChars.classList.add(CLS.tabActive);
-            tabTL.classList.remove(CLS.tabActive);
-            sectionChars.style.display = 'block';
-            sectionTL.style.display = 'none';
-        });
-        tabTL.addEventListener('click', () => {
-            tabTL.classList.add(CLS.tabActive);
-            tabChars.classList.remove(CLS.tabActive);
-            sectionChars.style.display = 'none';
-            sectionTL.style.display = 'block';
-        });
+        const setActiveTab = (tab) => {
+            const isChars = tab === 'chars';
+            const isTimeline = tab === 'timeline';
+            const isEdits = tab === 'edits';
+            tabChars.classList.toggle(CLS.tabActive, isChars);
+            tabTL.classList.toggle(CLS.tabActive, isTimeline);
+            tabEdits.classList.toggle(CLS.tabActive, isEdits);
+            sectionChars.style.display = isChars ? 'block' : 'none';
+            sectionTL.style.display = isTimeline ? 'block' : 'none';
+            sectionEdit.style.display = isEdits ? 'block' : 'none';
+            manual.style.display = isEdits ? 'none' : 'grid';
+        };
+        tabChars.addEventListener('click', () => setActiveTab('chars'));
+        tabTL.addEventListener('click', () => setActiveTab('timeline'));
+        tabEdits.addEventListener('click', () => setActiveTab('edits'));
 
         resizer.addEventListener('mousedown', (e) => {
+            if (persist.fullscreenPanel) return;
             e.preventDefault();
             const startY = e.clientY;
             const startH = panel.offsetHeight;
@@ -1518,6 +2144,7 @@
         panel.appendChild(sideResizer);
 
         sideResizer.addEventListener('mousedown', (e) => {
+            if (persist.fullscreenPanel) return;
             e.preventDefault();
             const startX = e.clientX;
             const startW = panel.offsetWidth;
@@ -1644,7 +2271,8 @@
                     if (Array.isArray(ev.characters_involved) && ev.characters_involved.length) {
                         // chs.textContent = `With: ${ev.characters_involved.join(', ')}`;
                         const NameChips = (ev.characters_involved || []).map(a => `<span class="${CLS.chip}">${escapeHTML(a)}</span>`).join(' ');
-                        chs.innerHTML = `With: ${NameChips}`;                   }
+                        chs.innerHTML = `With: ${NameChips}`;
+                    }
                     if (tm.textContent) row.appendChild(tm);
                     row.appendChild(ds);
                     if (chs.textContent) row.appendChild(chs);
@@ -1656,9 +2284,36 @@
 
         panel._renderCharacters = renderCharacters;
         panel._renderTimeline = renderTimeline;
+        panel._renderEdits = renderEditHistory;
 
         renderCharacters();
         renderTimeline();
+        renderEditHistory();
+
+        editUI = {
+            selectionInput,
+            promptInput,
+            rulesInput,
+            resultBox,
+            renderHistory: renderEditHistory,
+            setLoading: setEditLoading,
+            applySelection(payload) {
+                if (!payload || !payload.text) return;
+                const cleanText = stripHeatEmojis(payload.text);
+                selectionInput.value = cleanText;
+                persist.edits.draftSelection = cleanText;
+                pendingSelection = { ...payload, text: cleanText };
+                if (payload.chapter) {
+                    currentChapterId = payload.chapter;
+                }
+                scheduleSave();
+                setActiveTab('edits');
+                if (typeof renderEditHistory === 'function') {
+                    renderEditHistory();
+                }
+            }
+        };
+
         return panel;
     }
 
@@ -1672,6 +2327,14 @@
     persist.pronouns = persist.pronouns || {};
     persist.timeline = persist.timeline || [];
     persist.heat = persist.heat || {};
+    persist.edits = persist.edits || { rules: DEFAULT_EDIT_RULES, lastPrompt: '', draftSelection: '', lastResult: '', historyByChapter: {} };
+    persist.edits.historyByChapter = persist.edits.historyByChapter || {};
+    persist.fullscreenPanel = Boolean(persist.fullscreenPanel);
+
+    let currentWorkId = '';
+    let currentChapterId = '';
+    let editUI = null;
+    let pendingSelection = null;
 
     // DOM map for paragraph heat, populated during paragraph collection
     let paraDomMap = {};
@@ -1683,6 +2346,10 @@
     }
 
     normalizeCharactersStore();
+
+    const initialIDs = adapter.parseWorkAndChapterID();
+    currentWorkId = initialIDs.id || WORK_ID;
+    currentChapterId = initialIDs.chapter || '';
 
     function upsertName(name, kind = 'major') {
         const trimmed = name.trim();
@@ -1922,7 +2589,8 @@
 
     // Streaming logic (site-specific)
     (async function run() {
-        const { id, chapter } = adapter.parseWorkAndChapterID();
+        const id = currentWorkId;
+        const chapter = currentChapterId;
         const perfEntry = performance.getEntriesByType("navigation")[0];
         let isForceReload = false;
         // type 'reload' can be a normal or hard reload. There's no perfect way to know,
@@ -1941,6 +2609,13 @@
             if (partial && partial.heat) {
                 Object.assign(persist.heat, partial.heat);
                 changed = true;
+            }
+            if (partial && partial.edits) {
+                persist.edits.historyByChapter = partial.edits || {};
+                changed = true;
+                if (editUI && typeof editUI.renderHistory === 'function') {
+                    editUI.renderHistory();
+                }
             }
             if (changed) {
                 normalizeCharactersStore();
@@ -1966,7 +2641,8 @@
                     // Fallback: summarize entire page text
                     console.warn('[Paige] no chapters found, falling back to full text summarize');
                     inc();
-                    await streamSummarize({ force: isForceReload,
+                    await streamSummarize({
+                        force: isForceReload,
                         text: adapter.collectSingleText(), id, chapter: '', source: adapter.source
                     }, integratePartial).finally(() => dec());
                 } else {
