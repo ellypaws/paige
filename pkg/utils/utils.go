@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -439,4 +440,79 @@ func DecompressFromBase64(encoded string) (string, error) {
 		return "", err
 	}
 	return string(out), nil
+}
+
+// LimitStr returns a string truncated to n characters with "..." appended if longer.
+func LimitStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+// CleanJSON removes markdown code blocks from a string to extract raw JSON.
+func CleanJSON(s string) string {
+	s = strings.TrimSpace(s)
+	// Remove markdown code blocks
+	if strings.HasPrefix(s, "```") {
+		lines := strings.Split(s, "\n")
+		if len(lines) >= 2 {
+			// Remove first line (```json) and last line (```)
+			if strings.HasPrefix(lines[0], "```") {
+				lines = lines[1:]
+			}
+			if len(lines) > 0 && strings.HasPrefix(lines[len(lines)-1], "```") {
+				lines = lines[:len(lines)-1]
+			}
+			s = strings.Join(lines, "\n")
+		}
+	}
+	return strings.TrimSpace(s)
+}
+
+// SyncMap is a generic wrapper around sync.Map (or RWMutex map).
+// Using RWMutex map for type safety and simplicity.
+type SyncMap[M ~map[K]V, K comparable, V any] struct {
+	mu   sync.RWMutex
+	data M
+}
+
+func NewSyncMap[M ~map[K]V, K comparable, V any]() *SyncMap[M, K, V] {
+	return &SyncMap[M, K, V]{
+		data: make(map[K]V),
+	}
+}
+
+func (m *SyncMap[M, K, V]) Load(key K) (V, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	v, ok := m.data[key]
+	return v, ok
+}
+
+func (m *SyncMap[M, K, V]) Store(key K, value V) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data[key] = value
+}
+
+func (m *SyncMap[M, K, V]) Delete(key K) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.data, key)
+}
+
+func (m *SyncMap[M, K, V]) Map() M {
+	return m.data
+}
+
+// SanitizeFilename replaces dangerous characters with underscores.
+func SanitizeFilename(s string) string {
+	// Simple allowlist: alphanumeric, dash, underscore, dot.
+	// Or stricter: remove slashes.
+	s = strings.ReplaceAll(s, "/", "_")
+	s = strings.ReplaceAll(s, "\\", "_")
+	s = strings.ReplaceAll(s, ":", "_")
+	s = strings.TrimSpace(s)
+	return s
 }

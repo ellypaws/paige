@@ -14,6 +14,8 @@ import (
 	"github.com/labstack/gommon/log"
 
 	"paige/pkg/inference"
+	"paige/pkg/pprof"
+	"paige/pkg/queue/novelai"
 	"paige/pkg/schema"
 	"paige/pkg/server"
 	"paige/pkg/utils"
@@ -46,7 +48,15 @@ func main() {
 		logger.Info("Using local LM Studio as inferencer")
 	}
 
-	srv := server.NewServer(ctx, inf)
+	naiToken := os.Getenv("NOVELAI_TOKEN")
+	if naiToken == "" {
+		logger.Warn("NOVELAI_TOKEN not set, image generation will be disabled")
+	}
+	q := novelai.New(naiToken)
+	q.Start()
+	defer q.Stop()
+
+	srv := server.NewServer(ctx, inf, q)
 	srv.Echo.Logger.SetLevel(log.DEBUG)
 
 	summaries, err := utils.Load[map[string]schema.Summary]("CharacterSummary.json")

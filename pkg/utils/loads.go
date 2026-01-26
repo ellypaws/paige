@@ -60,3 +60,7 @@ func LoadSaver[T any](path string) (*Saver[T], error) {
 	}
 	return &Saver[T]{Path: path, Value: &v}, nil
 }
+
+func New[T any](v T) *T {
+	return &v
+}

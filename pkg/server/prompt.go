@@ -16,7 +16,7 @@ The JSON object must have three root keys: 'characters', 'timeline', and 'heat'.
   * 'gender': Gender as stated or estimated; if estimated, append an asterisk (e.g., "female*"). This is their preferred gender and not biological sex.
   * 'species' (optional): Species if explicitly stated or clearly implied.
   * 'personality': A summary of their key personality traits.
-  * 'physical_description': An object with keys for 'height', 'build', 'hair', and 'other' details. Do not put 'age' or 'gender' here.
+  * 'physical_description': An object with keys for 'height', 'build', 'fur', 'hair', and 'other' details. Do not put 'age' or 'gender' here.
   * 'sexual_characteristics': An object with keys for 'genitalia', 'penis_length_flaccid', 'penis_length_erect', 'pubic_hair', and 'other'. Mark with an asterisk if it's estimated e.g. 1.5-2 inches* Mention presence of foreskin or knot or type of genitalia.
   * 'notable_actions': An maximum array of 3-5 of strings listing their most significant events or their character. Avoid small, insignificant actions that do not describe the character or major events.
 
@@ -48,6 +48,8 @@ The JSON object must have three root keys: 'characters', 'timeline', and 'heat'.
 - Be thorough; do not omit explicit or sensitive details from the source text.
 - Consolidate information about a single character under their primary name.
 - Keep the JSON response as compact as possible.
+- If fur is not present, use skin color or omit if not stated.
+- If hair is not stated, always use the same as the fur color, or brown hair for humans.
 - Only keep notable events in the timeline that involve significant actions or character interactions.
 - Avoid removing other details that were already in place when iterating; only change estimates if they now have explicit information.
 - Keep notable actions and events mostly on the timeline rather than 'notable_actions', as the latter is for character-defining actions.
@@ -118,3 +120,58 @@ func buildEditSystemPrompt(customRules, userPrompt string) string {
 	}
 	return strings.Join(parts, "\n\n")
 }
+
+const portraitPrompt = `You are a strict tag generator for character portraits. Your task is to convert a character description into a JSON object containing Danbooru-style tags optimized for NovelAI (NAI).
+
+**JSON Structure:**
+- 'general': (string) General quality and style tags (e.g., "masterpiece, best quality, anime style").
+- 'characters': (array of objects) List of character captions.
+  - 'char_caption': (string) The character specific tags (hair, eyes, clothing, etc.).
+  - 'centers': (array of objects) Optional center point, usually just [{ "x": 0, "y": 0 }].
+- 'negative': (string) Negative prompt tags.
+
+**General Format for Char Caption:**
+[hair color] hair, [hair length], [fur color] fur, [ear type], [eye color] eyes, [special features], [clothing/nudity], [species/type tags]
+
+**Strict Ordering & Rules:**
+1. **Hair/Fur**: Start with hair color and fur color (e.g., "white hair, white fur").
+2. **Ears**: Specify ear type (e.g., "wolf ears", "fox ears").
+3. **Eyes**: Eye color (e.g., "brown eyes").
+4. **Clothing**: If nude, specify "nipples, navel" explicitly. If clothed, list items briefly.
+5. **Type Tags**: Always end with "cub, anthro, furry" (unless strictly human).
+
+**Example Input:**
+"A young white wolf boy with brown eyes. He's naked and excited."
+
+**Example JSON Output:**
+{
+  "general": "masterpiece, best quality, highres, anime style, bust, upper body, portrait, close-up, white background, simple background, [alkemanubis, tianliang_duohe_fangdongye], watercolor \(medium\)",
+  "characters": [
+    {
+      "char_caption": "white hair, white fur, wolf ears, penis, foreskin, brown eyes, multicolored hair, gloves (marking), nipples, navel, cub, anthro, furry",
+      "centers": [ { "x": 0, "y": 0 } ]
+    }
+  ],
+  "negative": "lowres, bad anatomy, bad hands, missing fingers, extra digit, fewer digits, cropped"
+}
+
+**Instructions:**
+- Output ONLY the raw JSON object.
+- Do not add markdown code blocks.`
+
+const scenePrompt = `You are a strict tag generator for NSFW scenes. Your task is to convert a scene description into a comma-separated list of Danbooru-style tags for NovelAI.
+
+**Format:**
+[character tags (summarized)], [action tags], [position tags], [camera/framing], [location]
+
+**Rules:**
+1. **Characters**: Summarize visual traits briefly (e.g., "1boy, 1girl, wolf boy, fox girl").
+2. **Action**: Explicitly describe the act (e.g., "sex, vaginal penetration, doggy style, from behind").
+3. **Anatomy**: "penis, pussy, erection, knotting, cum inside".
+4. **Framing**: "cowboy shot, cinematic lighting, dutch angle".
+5. **Location**: "bedroom, bed, messy sheets, indoor".
+6. **Quality**: Do not add quality tags (added automatically).
+
+**Example:**
+Input: The wolf boy forms a knot inside the fox girl from behind on the squeaky bed.
+Output: 1boy, 1girl, wolf boy, fox girl, sex, vaginal penetration, doggy style, from behind, knotting, penis, pussy, cum inside, orgasm, sweating, blushing, bedroom, bed, messy sheets, indoor, anthro, furry,`

@@ -3,6 +3,7 @@ package server
 import (
 	"cmp"
 	"encoding/json"
+	"fmt"
 	"io"
 	"iter"
 	"net/http"
@@ -403,4 +404,73 @@ func mergeTimelines(base, updates []schema.Timeline) []schema.Timeline {
 		return strings.Compare(a.Date, b.Date)
 	})
 	return out
+}
+
+type PortraitRequest struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+
+	Summary string `json:"summary"`
+	Style   string `json:"style"`
+}
+
+type PortraitPromptResponse struct {
+	General    string               `json:"general"`
+	Characters []schema.CharCaption `json:"characters"`
+	Negative   string               `json:"negative"`
+}
+
+// POST /api/portrait
+func (s *Server) handlePostPortrait(c echo.Context) error {
+	var req PortraitRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid json")
+	}
+
+	if req.Summary == "" {
+		// Try to find it in the summary
+		if s.Summary != nil {
+			if sum, ok := s.Summary[req.ID]; ok {
+				nameLower := strings.ToLower(strings.TrimSpace(req.Name))
+				for _, ch := range sum.Characters {
+					if strings.ToLower(strings.TrimSpace(ch.Name)) == nameLower || slices.ContainsFunc(ch.Aliases, func(a string) bool {
+						return strings.ToLower(strings.TrimSpace(a)) == nameLower
+					}) {
+						// Found character, use full details as prompt
+						log.Infof("Found character summary for %s in %s", req.Name, req.ID)
+						b, err := json.MarshalIndent(ch, "", "  ")
+						if err == nil {
+							req.Summary = string(b)
+						}
+						break
+					}
+				}
+			}
+		}
+
+		if req.Summary == "" {
+			return echo.NewHTTPError(http.StatusBadRequest, "character description is required and not found in summary")
+		}
+	}
+
+	if s.Queue == nil {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "queue not configured") // Or handle in flight check
+	}
+
+	safeID := utils.SanitizeFilename(req.ID)
+	safeName := utils.SanitizeFilename(req.Name)
+	key := fmt.Sprintf("%s-%s.webp", safeID, safeName)
+	s.PortraitParams.Store(key, req)
+
+	data, err := s.PortraitFlight.Get(key)
+
+	if err != nil {
+		log.Errorf("Portrait generation/retrieval failed: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "generation failed: "+err.Error())
+	}
+
+	c.Response().Header().Set(echo.HeaderContentType, "image/webp")
+	c.Response().WriteHeader(http.StatusOK)
+	_, err = c.Response().Write(data)
+	return err
 }
