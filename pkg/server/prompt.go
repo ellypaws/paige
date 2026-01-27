@@ -175,3 +175,6 @@ const scenePrompt = `You are a strict tag generator for NSFW scenes. Your task i
 **Example:**
 Input: The wolf boy forms a knot inside the fox girl from behind on the squeaky bed.
 Output: 1boy, 1girl, wolf boy, fox girl, sex, vaginal penetration, doggy style, from behind, knotting, penis, pussy, cum inside, orgasm, sweating, blushing, bedroom, bed, messy sheets, indoor, anthro, furry,`
+
+const qualityTags = "masterpiece, best quality, highres, anime style, bust, upper body, portrait, close-up, white background, simple background, "
+const styleTags = ", [alkemanubis, tianliang_duohe_fangdongye], watercolor (medium)"
