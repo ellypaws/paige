@@ -340,6 +340,12 @@ func (r *NovelAIRequest) Init() {
 	if r.Parameters.Image != nil {
 		r.Parameters.Strength = cmp.Or(r.Parameters.Strength, 0.6)
 	}
+
+	for i, char := range r.Parameters.V4Prompt.Caption.CharCaptions {
+		if len(char.Centers) == 0 {
+			r.Parameters.V4Prompt.Caption.CharCaptions[i].Centers = []Center{{X: 0, Y: 0}}
+		}
+	}
 }
 
 // Deprecated: Use cmp.Or
