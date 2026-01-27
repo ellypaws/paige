@@ -48,8 +48,8 @@ The JSON object must have three root keys: 'characters', 'timeline', and 'heat'.
 - Be thorough; do not omit explicit or sensitive details from the source text.
 - Consolidate information about a single character under their primary name.
 - Keep the JSON response as compact as possible.
-- If fur is not present, use skin color or omit if not stated.
-- If hair is not stated, always use the same as the fur color, or brown hair for humans.
+- If fur is not present, use skin color or omit if not stated for humans (Always interpolate if missing for furry characters).
+- If hair is not stated, always use the same as the fur color, or brown hair for humans (Always interpolate if missing with fur color).
 - Only keep notable events in the timeline that involve significant actions or character interactions.
 - Avoid removing other details that were already in place when iterating; only change estimates if they now have explicit information.
 - Keep notable actions and events mostly on the timeline rather than 'notable_actions', as the latter is for character-defining actions.
@@ -134,7 +134,8 @@ const portraitPrompt = `You are a strict tag generator for character portraits. 
 [hair color] hair, [hair length], [fur color] fur, [ear type], [eye color] eyes, [special features], [clothing/nudity], [species/type tags]
 
 **Strict Ordering & Rules:**
-1. **Hair/Fur**: Start with hair color and fur color (e.g., "white hair, white fur"). Always infer hair and fur color. If not stated, use fur color for hair or brown for humans.
+1. **Hair/Fur**: Start with hair color and fur color (e.g., "white hair, white fur"). Always infer hair and fur color.
+If not stated, use fur color for hair or brown for humans. If it says None but there is a fur color, use the fur color instead with short hair.
 2. **Ears**: Specify ear type (e.g., "wolf ears", "fox ears").
 3. **Eyes**: Eye color (e.g., "brown eyes").
 4. **Clothing**: If nude, specify "nipples, navel" explicitly. If clothed, list items briefly.
