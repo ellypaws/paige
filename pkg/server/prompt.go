@@ -134,7 +134,7 @@ const portraitPrompt = `You are a strict tag generator for character portraits. 
 [hair color] hair, [hair length], [fur color] fur, [ear type], [eye color] eyes, [special features], [clothing/nudity], [species/type tags]
 
 **Strict Ordering & Rules:**
-1. **Hair/Fur**: Start with hair color and fur color (e.g., "white hair, white fur").
+1. **Hair/Fur**: Start with hair color and fur color (e.g., "white hair, white fur"). Always infer hair and fur color. If not stated, use fur color for hair or brown for humans.
 2. **Ears**: Specify ear type (e.g., "wolf ears", "fox ears").
 3. **Eyes**: Eye color (e.g., "brown eyes").
 4. **Clothing**: If nude, specify "nipples, navel" explicitly. If clothed, list items briefly.

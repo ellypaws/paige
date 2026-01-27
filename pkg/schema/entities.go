@@ -39,7 +39,8 @@ type Character struct {
 type PhysicalDescription struct {
 	Height string `json:"height,omitempty" jsonschema_description:"Height as stated or estimated (use an asterisk if estimated)"`
 	Build  string `json:"build,omitempty" jsonschema_description:"Body build or physique (e.g., slim, athletic)"`
-	Hair   string `json:"hair,omitempty" jsonschema_description:"Hair color/style if stated"`
+	Fur    string `json:"fur,omitempty" jsonschema_description:"Fur color/pattern if stated for non-human characters"`
+	Hair   string `json:"hair,omitempty" jsonschema_description:"Hair color/style if stated. If not stated, interpolate from fur color for non-human characters."`
 	Other  string `json:"other,omitempty" jsonschema_description:"Any additional physical details explicitly mentioned"`
 }
 
