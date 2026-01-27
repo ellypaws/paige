@@ -170,38 +170,14 @@ func (s *Server) generateAndCachePortrait(req PortraitRequest) ([]byte, error) {
 		log.Infof("Force regenerating portrait for %s (%s)", req.Name, req.ID)
 	}
 
-	forbidID := fmt.Sprintf("portrait:%s character:%s", req.ID, req.Name)
-	var useFallback bool
-	if _, ok := s.Forbids[forbidID]; ok {
-		log.Infof("Skipping inference for forbidden character: %s", forbidID)
-		useFallback = true
-	}
-
 	log.Infof("Generating portrait for %s (%s)", req.Name, req.ID)
 
 	var resp PortraitPromptResponse
 	var err error
 
-	if !useFallback {
-		resp, err = s.inferPortraitTags(req)
-		if err != nil {
-			log.Errorf("Inference failed for %s: %v. Falling back to manual tags.", forbidID, err)
-			bin, _ := json.Marshal(req.Summary)
-			s.Forbids[forbidID] = schema.Forbids{
-				Reason: "inference failed",
-				Text:   string(bin),
-				Raw:    err.Error(),
-			}
-			useFallback = true
-		}
-	}
-
-	if useFallback {
-		resp, err = s.manualBuildPortraitTags(*req.Summary)
-		if err != nil {
-			return nil, fmt.Errorf("manual tag building failed: %w", err)
-		}
-		log.Infof("Used manual fallback strategy for %s", forbidID)
+	resp, err = s.manualBuildPortraitTags(*req.Summary)
+	if err != nil {
+		return nil, fmt.Errorf("manual tag building failed: %w", err)
 	}
 
 	// Apply quality and style tags
