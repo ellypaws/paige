@@ -73,9 +73,9 @@ type PortraitRequest struct {
 	Source string `json:"source,omitempty"`
 	Name   string `json:"name,omitempty"`
 
-	Summary string `json:"summary,omitempty"`
-	Style   string `json:"style,omitempty"`
-	Force   bool   `json:"force,omitempty"`
+	Summary *schema.Character `json:"summary,omitempty"`
+	Style   string            `json:"style,omitempty"`
+	Force   bool              `json:"force,omitempty"`
 }
 
 type PortraitPromptResponse struct {
@@ -94,7 +94,7 @@ func (s *Server) handlePostPortrait(c echo.Context) error {
 	if req.Source != "" && req.ID != "" {
 		req.ID = req.Source + ":" + req.ID
 	}
-	if req.Summary == "" {
+	if req.Summary == nil {
 		if s.Summary != nil {
 			if sum, ok := s.Summary[req.ID]; ok {
 				nameLower := strings.ToLower(strings.TrimSpace(req.Name))
@@ -104,17 +104,14 @@ func (s *Server) handlePostPortrait(c echo.Context) error {
 					}) {
 						// Found character, use full details as prompt
 						log.Infof("Found character summary for %s in %s", req.Name, req.ID)
-						b, err := json.MarshalIndent(ch, "", "  ")
-						if err == nil {
-							req.Summary = string(b)
-						}
+						req.Summary = &ch
 						break
 					}
 				}
 			}
 		}
 
-		if req.Summary == "" {
+		if req.Summary == nil {
 			return echo.NewHTTPError(http.StatusBadRequest, "character description is required and not found in summary")
 		}
 	}
@@ -189,9 +186,10 @@ func (s *Server) generateAndCachePortrait(req PortraitRequest) ([]byte, error) {
 		resp, err = s.inferPortraitTags(req)
 		if err != nil {
 			log.Errorf("Inference failed for %s: %v. Falling back to manual tags.", forbidID, err)
+			bin, _ := json.Marshal(req.Summary)
 			s.Forbids[forbidID] = schema.Forbids{
 				Reason: "inference failed",
-				Text:   req.Summary,
+				Text:   string(bin),
 				Raw:    err.Error(),
 			}
 			useFallback = true
@@ -199,7 +197,7 @@ func (s *Server) generateAndCachePortrait(req PortraitRequest) ([]byte, error) {
 	}
 
 	if useFallback {
-		resp, err = s.manualBuildPortraitTags(req.Summary)
+		resp, err = s.manualBuildPortraitTags(*req.Summary)
 		if err != nil {
 			return nil, fmt.Errorf("manual tag building failed: %w", err)
 		}
@@ -209,8 +207,12 @@ func (s *Server) generateAndCachePortrait(req PortraitRequest) ([]byte, error) {
 	// Apply quality and style tags
 	resp.General = qualityTags + resp.General + styleTags
 
+	for i, char := range resp.Characters {
+		resp.Characters[i].CharCaption = strings.ReplaceAll(char.CharCaption, "*", "")
+	}
+
 	naiReq := schema.DefaultNovelAIRequest()
-	naiReq.SetPrompts(resp.General, resp.Characters, resp.Negative)
+	naiReq.SetPrompts(resp.General, resp.Characters, resp.Negative+negativeTags)
 
 	if s.Queue == nil {
 		return nil, fmt.Errorf("queue not configured")
@@ -239,13 +241,13 @@ func (s *Server) generateAndCachePortrait(req PortraitRequest) ([]byte, error) {
 }
 
 func (s *Server) inferPortraitTags(req PortraitRequest) (PortraitPromptResponse, error) {
-	input := req.Summary
-	if req.Style != "" {
-		input += "\nStyle: " + req.Style
+	bin, err := json.MarshalIndent(req.Summary, "", "  ")
+	if err != nil {
+		return PortraitPromptResponse{}, fmt.Errorf("failed to marshal summary: %w", err)
 	}
 
 	var resp PortraitPromptResponse
-	respJSON, err := s.Inferencer.Infer(s.Ctx, nil, portraitPrompt, input)
+	respJSON, err := s.Inferencer.Infer(s.Ctx, nil, portraitPrompt, string(bin))
 	if err != nil {
 		return resp, err
 	}
@@ -265,12 +267,7 @@ func (s *Server) inferPortraitTags(req PortraitRequest) (PortraitPromptResponse,
 	return resp, nil
 }
 
-func (s *Server) manualBuildPortraitTags(summaryJSON string) (PortraitPromptResponse, error) {
-	var c schema.Character
-	if err := json.Unmarshal([]byte(summaryJSON), &c); err != nil {
-		return PortraitPromptResponse{}, fmt.Errorf("failed to unmarshal character summary: %w", err)
-	}
-
+func (s *Server) manualBuildPortraitTags(c schema.Character) (PortraitPromptResponse, error) {
 	var parts []string
 
 	// 1. Hair/Fur
@@ -278,7 +275,7 @@ func (s *Server) manualBuildPortraitTags(summaryJSON string) (PortraitPromptResp
 		parts = append(parts, c.PhysicalDescription.Hair)
 	}
 	if c.PhysicalDescription.Fur != "" {
-		if c.PhysicalDescription.Hair == "" {
+		if utils.StringContains(c.PhysicalDescription.Hair, false, "", "None", "Unknown") {
 			// Infer hair color from fur if hair not specified
 			parts = append(parts, c.PhysicalDescription.Fur+" hair")
 		}
@@ -310,18 +307,33 @@ func (s *Server) manualBuildPortraitTags(summaryJSON string) (PortraitPromptResp
 	}
 
 	// 5. Sexual Characteristics (Genitalia)
-	if c.SexualCharacteristics.Genitalia != "" {
-		parts = append(parts, c.SexualCharacteristics.Genitalia)
-	}
-	if c.SexualCharacteristics.PenisLengthErect != nil && *c.SexualCharacteristics.PenisLengthErect != "" {
-		parts = append(parts, "erection")
-	}
+	// if c.SexualCharacteristics.Genitalia != "" {
+	// 	parts = append(parts, c.SexualCharacteristics.Genitalia)
+	// }
+	// if c.SexualCharacteristics.PenisLengthErect != nil && *c.SexualCharacteristics.PenisLengthErect != "" {
+	// 	parts = append(parts, "erection")
+	// }
 
 	// 6. Species / Type Tags
 	if c.Species != "" {
 		parts = append(parts, c.Species)
 	}
-	parts = append(parts, "anthro", "furry")
+	if !utils.StringContains(c.Species, false, "Human", "Humanoid") {
+		parts = append(parts, "anthro", "furry")
+	}
+
+	if c.Age != "" {
+		if _, err := fmt.Sscanf(c.Age, "%d", new(int)); err == nil {
+			c.Age = c.Age + " years old"
+		}
+		parts = append(parts, c.Age)
+	}
+	if c.Role != "" {
+		parts = append(parts, c.Role)
+	}
+	if c.Personality != "" {
+		parts = append(parts, c.Personality)
+	}
 
 	caption := strings.Join(parts, ", ")
 

@@ -516,3 +516,23 @@ func SanitizeFilename(s string) string {
 	s = strings.TrimSpace(s)
 	return s
 }
+
+// StringContains checks if s contains any of the substrings in substr.
+// An empty substring matches only an empty string. Set sensitive to true for case-sensitive match.
+func StringContains(s string, sensitive bool, substr ...string) bool {
+	if !sensitive {
+		s = strings.ToLower(s)
+	}
+	for _, sub := range substr {
+		if sub == "" && s == "" {
+			return true
+		}
+		if !sensitive {
+			sub = strings.ToLower(sub)
+		}
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}

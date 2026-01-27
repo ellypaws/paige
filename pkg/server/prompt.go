@@ -134,12 +134,20 @@ const portraitPrompt = `You are a strict tag generator for character portraits. 
 [hair color] hair, [hair length], [fur color] fur, [ear type], [eye color] eyes, [special features], [clothing/nudity], [species/type tags]
 
 **Strict Ordering & Rules:**
-1. **Hair/Fur**: Start with hair color and fur color (e.g., "white hair, white fur"). Always infer hair and fur color.
+1. **Hair/Fur**: Start with hair color and fur color (e.g., "white hair, white fur"). Always infer hair and fur color if not a human.
 If not stated, use fur color for hair or brown for humans. If it says None but there is a fur color, use the fur color instead with short hair.
+Do not include fur if the character is strictly human.
 2. **Ears**: Specify ear type (e.g., "wolf ears", "fox ears").
 3. **Eyes**: Eye color (e.g., "brown eyes").
 4. **Clothing**: If nude, specify "nipples, navel" explicitly. If clothed, list items briefly.
 5. **Type Tags**: Always end with "cub, anthro, furry" (unless strictly human).
+6. **Age**: If described as young or childlike, include "cub". Include the age if specified. Write adult if over 18.
+7. **Role**: Put the character role in booru style tags if specified.
+8. **Personality**: Summarize and briefly list key personality traits if described.
+
+**Instructions:**
+- Output ONLY the raw JSON object.
+- Do not add markdown code blocks.
 
 **Example Input:**
 "A young white wolf boy with brown eyes. He's naked and excited."
@@ -154,11 +162,7 @@ If not stated, use fur color for hair or brown for humans. If it says None but t
     }
   ],
   "negative": "lowres, bad anatomy, bad hands, missing fingers, extra digit, fewer digits, cropped"
-}
-
-**Instructions:**
-- Output ONLY the raw JSON object.
-- Do not add markdown code blocks.`
+}`
 
 const scenePrompt = `You are a strict tag generator for NSFW scenes. Your task is to convert a scene description into a comma-separated list of Danbooru-style tags for NovelAI.
 
@@ -179,3 +183,4 @@ Output: 1boy, 1girl, wolf boy, fox girl, sex, vaginal penetration, doggy style, 
 
 const qualityTags = "masterpiece, best quality, highres, anime style, bust, upper body, portrait, close-up, white background, simple background, "
 const styleTags = ", [alkemanubis, tianliang_duohe_fangdongye], watercolor (medium)"
+const negativeTags = "english text, text, japanese text, writing, lowres, bad anatomy, bad hands, missing fingers, extra digit, fewer digits, cropped"
