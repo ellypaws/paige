@@ -1140,7 +1140,7 @@
         for (const v of Object.values(persist.characters)) {
             if ('avatar' in v) delete v.avatar;
             if ('personality' in v && (v.personality || '').length > 400) v.personality = (v.personality || '').slice(0, 400) + '…';
-            if ('notable_actions' in v && Array.isArray(v.notable_actions) && v.notable_actions.length > 10) v.notable_actions = v.notable_actions.slice(0, 10);
+            if ('notable_actions' in v && Array.isArray(v.notable_actions) && v.notable_actions.length > 3) v.notable_actions = v.notable_actions.slice(0, 3);
             if ('sexual_characteristics' in v && v.sexual_characteristics) {
                 const sc = v.sexual_characteristics;
                 for (const k of Object.keys(sc)) {
@@ -1297,6 +1297,7 @@
     async function generatePortrait({ id, name, force }) {
         const key = portraitKey(id, name);
         const state = PORTRAIT_STATE.get(key);
+        const existingUrl = state && state.status === 'ready' ? state.url : '';
         if (!force && state && state.status === 'ready') return;
         if (!force && state && state.status === 'error') return;
 
@@ -1309,9 +1310,14 @@
             setAvatarSrc(name, url);
         } catch (err) {
             console.warn('[Paige] portrait generation failed', err);
-            setPortraitState(key, { status: 'error', url: '' });
-            const fallback = getAvatar(name, (persist.characters[name] && persist.characters[name].color) || nameToColor(name));
-            setAvatarSrc(name, fallback);
+            if (existingUrl) {
+                setPortraitState(key, { status: 'ready', url: existingUrl });
+                setAvatarSrc(name, existingUrl);
+            } else {
+                setPortraitState(key, { status: 'error', url: '' });
+                const fallback = getAvatar(name, (persist.characters[name] && persist.characters[name].color) || nameToColor(name));
+                setAvatarSrc(name, fallback);
+            }
         } finally {
             setAvatarLoading(name, false);
         }
