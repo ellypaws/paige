@@ -23,6 +23,7 @@
     /** Backend endpoints */
     const SUMMARIZE_URL = 'http://localhost:8080/api/summarize';
     const EDIT_URL = 'http://localhost:8080/api/edit';
+    const PORTRAIT_URL = 'http://localhost:8080/api/portrait';
 
     /** Pronouns to colorize (case-insensitive word matches). */
     const PRONOUNS = ['he', 'him', 'his', 'himself', 'she', 'her', 'hers', 'herself', 'they', 'them', 'their', 'theirs', 'themself', 'themselves', 'xe', 'xem', 'xyr', 'xyrs', 'xemself', 'ze', 'zir', 'zirs', 'zirself', 'fae', 'faer', 'faers', 'faerself', 'it', 'its', 'itself'];
@@ -119,6 +120,8 @@
         listMinor: 'ao3sn-list-minor',
         card: 'ao3sn-card',
         avatar: 'ao3sn-avatar',
+        avatarImg: 'ao3sn-avatar-img',
+        avatarLoading: 'ao3sn-avatar-loading',
         row: 'ao3sn-row',
         compactName: 'ao3sn-compact-name',
         details: 'ao3sn-details',
@@ -566,6 +569,35 @@
       background: radial-gradient(circle at 30% 20%, rgba(255,255,255,0.6), rgba(80,90,160,0.4));
       overflow: hidden;
       box-shadow: 0 0 0 1px rgba(0,0,0,0.25);
+      position: relative;
+    }
+
+    .${CLS.avatarImg} {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .${CLS.avatar}.${CLS.avatarLoading} .${CLS.avatarImg} {
+      opacity: 0.7;
+      filter: blur(0.2px) saturate(0.85);
+    }
+
+    .${CLS.avatar}.${CLS.avatarLoading}::after {
+      content: "";
+      position: absolute;
+      inset: 6px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.35);
+      border-top-color: rgba(255,255,255,0.95);
+      animation: ao3sn-spin 0.9s linear infinite;
+      pointer-events: none;
+    }
+
+    @keyframes ao3sn-spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
     }
 
     .${CLS.details} {
@@ -796,6 +828,7 @@
      * @typedef {{
      *   height: string=,
      *   build: string=,
+     *   fur: string=,
      *   hair: string=,
      *   other: string=
      * }} PhysicalDescription
@@ -1209,6 +1242,125 @@
         return canvas.toDataURL('image/png');
     }
 
+    /** Portrait generation state (in-memory only). */
+    const PORTRAIT_STATE = new Map();
+    const PORTRAIT_QUEUE = [];
+    const PORTRAIT_REQUESTS = new Map();
+    let portraitQueueRunning = false;
+
+    function portraitKey(id, name) {
+        return `${id}::${name}`;
+    }
+
+    function setPortraitState(key, next) {
+        const prev = PORTRAIT_STATE.get(key);
+        if (prev && prev.url && prev.url.startsWith('blob:') && prev.url !== next.url) {
+            try {
+                URL.revokeObjectURL(prev.url);
+            } catch { /* ignore */ }
+        }
+        PORTRAIT_STATE.set(key, next);
+    }
+
+    function findCardsByName(name) {
+        return Array.from(document.querySelectorAll(`.${CLS.card}[data-name]`)).filter(card => card.dataset.name === name);
+    }
+
+    function setAvatarLoading(name, on) {
+        for (const card of findCardsByName(name)) {
+            const avatar = card.querySelector(`.${CLS.avatar}`);
+            if (avatar) avatar.classList.toggle(CLS.avatarLoading, on);
+        }
+    }
+
+    function setAvatarSrc(name, src) {
+        for (const card of findCardsByName(name)) {
+            const img = card.querySelector(`.${CLS.avatarImg}`);
+            if (img) img.src = src;
+        }
+    }
+
+    async function requestPortrait({ id, name, force }) {
+        const payload = { id, name, source: adapter.source };
+        if (force) payload.force = true;
+        const res = await fetch(PORTRAIT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+            throw new Error(`Portrait error: ${res.status}`);
+        }
+        return res.blob();
+    }
+
+    async function generatePortrait({ id, name, force }) {
+        const key = portraitKey(id, name);
+        const state = PORTRAIT_STATE.get(key);
+        if (!force && state && state.status === 'ready') return;
+        if (!force && state && state.status === 'error') return;
+
+        setPortraitState(key, { status: 'loading', url: state?.url || '' });
+        setAvatarLoading(name, true);
+        try {
+            const blob = await requestPortrait({ id, name, force });
+            const url = URL.createObjectURL(blob);
+            setPortraitState(key, { status: 'ready', url });
+            setAvatarSrc(name, url);
+        } catch (err) {
+            console.warn('[Paige] portrait generation failed', err);
+            setPortraitState(key, { status: 'error', url: '' });
+            const fallback = getAvatar(name, (persist.characters[name] && persist.characters[name].color) || nameToColor(name));
+            setAvatarSrc(name, fallback);
+        } finally {
+            setAvatarLoading(name, false);
+        }
+    }
+
+    function enqueuePortrait({ id, name, force }) {
+        const key = portraitKey(id, name);
+        const existing = PORTRAIT_REQUESTS.get(key);
+        if (existing) {
+            if (force) existing.force = true;
+            return;
+        }
+        PORTRAIT_REQUESTS.set(key, { id, name, force: Boolean(force) });
+        PORTRAIT_QUEUE.push(key);
+        runPortraitQueue();
+    }
+
+    function runPortraitQueue() {
+        if (portraitQueueRunning) return;
+        portraitQueueRunning = true;
+        (async () => {
+            while (PORTRAIT_QUEUE.length) {
+                const key = PORTRAIT_QUEUE.shift();
+                const req = PORTRAIT_REQUESTS.get(key);
+                PORTRAIT_REQUESTS.delete(key);
+                if (!req) continue;
+                await generatePortrait(req);
+            }
+            portraitQueueRunning = false;
+        })().catch(err => {
+            console.warn('[Paige] portrait queue failed', err);
+            portraitQueueRunning = false;
+        });
+    }
+
+    function queuePortraitsInOrder({ listRoot, listMinorRoot, force }) {
+        const id = currentWorkId || WORK_ID;
+        if (!id) return;
+        const ordered = [];
+        [listRoot, listMinorRoot].forEach(root => {
+            if (!root) return;
+            root.querySelectorAll(`.${CLS.card}[data-name]`).forEach(card => {
+                const name = card.dataset.name;
+                if (name) ordered.push(name);
+            });
+        });
+        ordered.forEach(name => enqueuePortrait({ id, name, force }));
+    }
+
     /** ---------------------------------------
      * Backend (SSE) helpers
      * ------------------------------------- */
@@ -1458,7 +1610,7 @@
         <div class="${CLS.field}"><b>Species:</b> ${escapeHTML(d.species || '—')}</div>
         <div class="${CLS.field}"><b>Kind:</b> ${escapeHTML(d.kind || '—')}</div>
       </div>`;
-        const phys = [pd.height && `<div class="${CLS.field}">• Height: ${escapeHTML(pd.height)}</div>`, pd.build && `<div class="${CLS.field}">• Build: ${escapeHTML(pd.build)}</div>`, pd.hair && `<div class="${CLS.field}">• Hair: ${escapeHTML(pd.hair)}</div>`, pd.other && `<div class="${CLS.field}">• Other: ${escapeHTML(pd.other)}</div>`,].filter(Boolean).join('');
+        const phys = [pd.height && `<div class="${CLS.field}">• Height: ${escapeHTML(pd.height)}</div>`, pd.build && `<div class="${CLS.field}">• Build: ${escapeHTML(pd.build)}</div>`, pd.fur && `<div class="${CLS.field}">• Fur: ${escapeHTML(pd.fur)}</div>`, pd.hair && `<div class="${CLS.field}">• Hair: ${escapeHTML(pd.hair)}</div>`, pd.other && `<div class="${CLS.field}">• Other: ${escapeHTML(pd.other)}</div>`,].filter(Boolean).join('');
         const sex = [sc.genitalia && `<div class="${CLS.field}">• Genitalia: ${escapeHTML(sc.genitalia)}</div>`, sc.penis_length_flaccid && `<div class="${CLS.field}">• Penis (flaccid): ${escapeHTML(sc.penis_length_flaccid)}</div>`, sc.penis_length_erect && `<div class="${CLS.field}">• Penis (erect): ${escapeHTML(sc.penis_length_erect)}</div>`, sc.pubic_hair && `<div class="${CLS.field}">• Pubic hair: ${escapeHTML(sc.pubic_hair)}</div>`, sc.other && `<div class="${CLS.field}">• Other: ${escapeHTML(sc.other)}</div>`,].filter(Boolean).join('');
 
         const actsArr = Array.isArray(d.notable_actions) ? d.notable_actions : [];
@@ -1784,10 +1936,18 @@
             applyFullscreenState();
             savePersistSafe(persist);
         });
+        const regenPortraitsBtn = document.createElement('button');
+        regenPortraitsBtn.className = CLS.iconBtn;
+        regenPortraitsBtn.textContent = '🎨 Portraits';
+        regenPortraitsBtn.title = 'Regenerate portraits';
+        regenPortraitsBtn.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            queuePortraitsInOrder({ listRoot: list, listMinorRoot: listMinor, force: true });
+        });
         const title = document.createElement('div');
         title.style.fontWeight = '700';
         title.textContent = adapter.name;
-        header.append(pin, compact, fullscreenBtn, title);
+        header.append(pin, compact, fullscreenBtn, regenPortraitsBtn, title);
         applyFullscreenState();
 
         const tabs = document.createElement('div');
@@ -2172,12 +2332,25 @@
         function makeCard(name, data, povName) {
             const card = document.createElement('div');
             card.className = CLS.card;
+            card.dataset.name = name;
             if (povName === name) card.classList.add('ao3sn-featured');
 
+            const avatar = document.createElement('div');
+            avatar.className = CLS.avatar;
             const img = document.createElement('img');
-            img.className = CLS.avatar;
+            img.className = CLS.avatarImg;
             img.alt = `${name} avatar`;
-            img.src = getAvatar(name, data.color);
+            const key = portraitKey(currentWorkId || WORK_ID, name);
+            const portrait = PORTRAIT_STATE.get(key);
+            if (portrait && portrait.status === 'ready' && portrait.url) {
+                img.src = portrait.url;
+            } else {
+                img.src = getAvatar(name, data.color);
+                if (portrait && portrait.status === 'loading') {
+                    avatar.classList.add(CLS.avatarLoading);
+                }
+            }
+            avatar.appendChild(img);
             const text = document.createElement('div');
             text.className = CLS.row;
             const nm = document.createElement('div');
@@ -2206,7 +2379,7 @@
             });
 
             text.append(nm, factsEl);
-            card.append(img, text, rm);
+            card.append(avatar, text, rm);
 
             const details = document.createElement('div');
             details.className = CLS.details;
@@ -2243,6 +2416,7 @@
             }
             major.forEach(([n, d]) => list.appendChild(makeCard(n, d, pov)));
             minor.forEach(([n, d]) => listMinor.appendChild(makeCard(n, d, pov)));
+            queuePortraitsInOrder({ listRoot: list, listMinorRoot: listMinor, force: false });
         }
 
         function renderTimeline() {
