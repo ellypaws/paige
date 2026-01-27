@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AO3/Inkbunny Smart Name Highlighter + Pronoun Colorizer (SSE, Timeline, Aliases)
 // @namespace    ao3-inkbunny-smart-names
-// @version      1.8.0
+// @version      1.9.0
 // @description  Highlight names & pronouns on AO3 and Inkbunny. Streams /api/summarize (SSE), updates on EVERY event, canonical alias merging, side panel + timeline, and tooltip truncation of notable actions only.
 // @author       you
 // @match        https://archiveofourown.org/works/*
@@ -893,19 +893,19 @@
      *   characters: Record<string, ({color:string, mentions:number} & CharacterData)>,
      *   pronouns: Record<string, {color:string}>,
      *   timeline: TimelineDay[],
-    *   pinnedPanel: boolean,
-    *   fullscreenPanel: boolean,
+     *   pinnedPanel: boolean,
+     *   fullscreenPanel: boolean,
      *   panelHeight: number,
      *   panelWidth: number,
      *   povName: string|null,
      *   heat: Record<string, number>=
-    *   edits?: {
-    *     rules: string,
-    *     lastPrompt: string,
-    *     draftSelection: string,
-    *     lastResult: string,
-    *     historyByChapter: Record<string, EditHistoryEntry[]>
-    *   }
+     *   edits?: {
+     *     rules: string,
+     *     lastPrompt: string,
+     *     draftSelection: string,
+     *     lastResult: string,
+     *     historyByChapter: Record<string, EditHistoryEntry[]>
+     *   }
      * }} Persist
      */
 
@@ -1348,6 +1348,7 @@
     }
 
     function queuePortraitsInOrder({ listRoot, listMinorRoot, force }) {
+        if (!summaryReady) return;
         const id = currentWorkId || WORK_ID;
         if (!id) return;
         const ordered = [];
@@ -1405,7 +1406,7 @@
      *   | { text: string, paragraphs?: Record<string, string>, id: string, chapter?: string, characters?: CharacterData[], timeline?: TimelineDay[], source: 'ao3'|'inkbunny', force?: boolean }
      *   | { text?: string, paragraphs: Record<string, string>, id: string, chapter?: string, characters?: CharacterData[], timeline?: TimelineDay[], source: 'ao3'|'inkbunny', force?: boolean }
      * )} req
-     * @param {(partial: { characters?: CharacterData[], timeline?: TimelineDay[] }) => void} onUpdate
+     * @param {(partial: { characters?: CharacterData[], timeline?: TimelineDay[] }, event?: string) => void} onUpdate
      */
     async function streamSummarize(req, onUpdate) {
         // req.paragraphs is a Record<string,string> when we send sections
@@ -1431,7 +1432,7 @@
         });
         if (!res.ok || !res.body) throw new Error(`Summarize error: ${res.status}`);
         await readSSE(res.body, ({ event, data }) => {
-            if ((event === 'data' || event === 'done') && data) onUpdate(data);
+            if ((event === 'data' || event === 'done') && data) onUpdate(data, event);
         });
     }
 
@@ -1783,6 +1784,7 @@
     }
 
     let inflight = 0;
+    let summaryReady = false;
     const inc = () => {
         inflight++;
         setThrobber(true);
@@ -1942,6 +1944,7 @@
         regenPortraitsBtn.title = 'Regenerate portraits';
         regenPortraitsBtn.addEventListener('click', (ev) => {
             ev.stopPropagation();
+            if (!summaryReady) return;
             queuePortraitsInOrder({ listRoot: list, listMinorRoot: listMinor, force: true });
         });
         const title = document.createElement('div');
@@ -2459,6 +2462,7 @@
         panel._renderCharacters = renderCharacters;
         panel._renderTimeline = renderTimeline;
         panel._renderEdits = renderEditHistory;
+        panel._queuePortraits = () => queuePortraitsInOrder({ listRoot: list, listMinorRoot: listMinor, force: false });
 
         renderCharacters();
         renderTimeline();
@@ -2772,7 +2776,9 @@
         // A true hard reload (ctrl+f5) is type 'navigate' on some browsers, but sends `Cache-Control: no-cache`.
         if (perfEntry && perfEntry.type === 'reload') isForceReload = true;
 
-        const integratePartial = (partial) => {
+        const integratePartial = (partial, event) => {
+            const isDone = event === 'done';
+            if (isDone) summaryReady = true;
             let changed = false;
             if (partial && Array.isArray(partial.characters)) {
                 for (const ch of partial.characters) changed = mergeCharacterIntoPersist(ch) || changed;
@@ -2797,6 +2803,9 @@
                 renderCharacters();
                 renderTimeline();
                 reprocessNamesDebounced();
+            }
+            if (isDone && !changed && panel && typeof panel._queuePortraits === 'function') {
+                panel._queuePortraits();
             }
             // Always try to render heat from any partial, even if no "changed" for persist
             if (partial && partial.heat && paraDomMap) {
