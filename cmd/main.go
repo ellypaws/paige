@@ -14,7 +14,6 @@ import (
 	"github.com/labstack/gommon/log"
 
 	"paige/pkg/inference"
-	"paige/pkg/pprof"
 	"paige/pkg/queue/novelai"
 	"paige/pkg/schema"
 	"paige/pkg/server"
