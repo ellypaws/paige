@@ -40,6 +40,12 @@ func main() {
 			logger.Fatal(err)
 		}
 		logger.Info("Using Gemini as inferencer")
+	} else if kimiKey := os.Getenv("KIMI_API_KEY"); kimiKey != "" {
+		inf = inference.NewKimiInferencer(kimiKey, os.Getenv("KIMI_MODEL"))
+		logger.Info("Using Kimi as inferencer")
+	} else if moonshotKey := os.Getenv("MOONSHOT_API_KEY"); moonshotKey != "" {
+		inf = inference.NewMoonshotInferencer(moonshotKey, os.Getenv("MOONSHOT_MODEL"))
+		logger.Info("Using Moonshot as inferencer")
 	} else {
 		openAI.ChangeBaseURL("http://localhost:1234/v1")
 		openAI.SetModel("")
