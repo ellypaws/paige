@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         AO3/Inkbunny Smart Name Highlighter + Pronoun Colorizer (SSE, Timeline, Aliases)
 // @namespace    ao3-inkbunny-smart-names
-// @version      1.9.0
+// @version      1.9.1
 // @description  Highlight names & pronouns on AO3 and Inkbunny. Streams /api/summarize (SSE), updates on EVERY event, canonical alias merging, side panel + timeline, and tooltip truncation of notable actions only.
-// @author       you
+// @author       ellypaws
+// @updateURL    https://raw.githubusercontent.com/ellypaws/paige/refs/heads/main/userscript/paige.userscript.js
 // @match        https://archiveofourown.org/works/*
 // @match        https://archiveofourown.org/chapters/*
 // @match        https://inkbunny.net/s/*
@@ -146,8 +147,23 @@
       padding: 0 0.08em;
       text-decoration: none;
       cursor: default;
+      pointer-events: auto;
     }
-    .${CLS.name}:hover, .${CLS.pronoun}:hover { filter: brightness(1.15); }
+    .${CLS.name}:hover, .${CLS.pronoun}:hover { filter: brightness(1.25); }
+
+    .ao3sn-wrap {
+      display: inline;
+      white-space: nowrap;
+    }
+    .ao3sn-wrap:hover .${CLS.name},
+    .ao3sn-wrap:has(.${CLS.infoDot}:hover) .${CLS.name} {
+      filter: brightness(1.25);
+    }
+    /* Ensure name hover works even when dot is between mouse and name */
+    .ao3sn-wrap .${CLS.name} {
+      position: relative;
+      z-index: 1;
+    }
 
     .${CLS.shine} {
       background-image: linear-gradient(120deg, transparent 0%, rgba(255,255,255,0.25) 50%, transparent 100%);
@@ -163,20 +179,26 @@
 
     .${CLS.infoDot} {
       display: inline-block;
-      width: 0.8em;
-      height: 0.8em;
-      margin-left: 0.25em;
+      width: 0.7em;
+      height: 0.7em;
+      margin-left: 0.2em;
+      margin-right: 0.1em;
       border-radius: 50%;
-      border: 1px solid currentColor;
+      border: 1.5px solid currentColor;
       vertical-align: middle;
       position: relative;
       top: -0.05em;
       cursor: pointer;
-      opacity: 0.9;
-      background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.9), transparent);
-      box-shadow: 0 0 0 1px rgba(0,0,0,0.35);
+      opacity: 1;
+      background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.95), rgba(255,255,255,0.4) 50%, transparent 70%);
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 0 4px rgba(0,0,0,0.3);
+      pointer-events: auto;
+      flex-shrink: 0;
     }
-    .${CLS.infoDot}:hover { filter: brightness(1.25); }
+    .${CLS.infoDot}:hover {
+      filter: brightness(1.3);
+      transform: scale(1.15);
+    }
 
     .${CLS.tooltip} {
       position: absolute;
@@ -189,11 +211,11 @@
       font-size: 0.9em;
       line-height: 1.35em;
       max-width: 320px;
-      pointer-events: none;
+      pointer-events: none !important;
       transform: translate(-50%, calc(-100% - 12px));
       border: 1px solid rgba(255,255,255,0.22);
       opacity: 0;
-      transition: opacity 150ms ease, transform 150ms ease;
+      transition: opacity 150ms ease 50ms, transform 150ms ease 50ms;
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
     }
@@ -344,14 +366,15 @@
       font-size: 11px;
       padding: 2px 8px;
       border-radius: 999px;
-      border: 1px solid rgba(255,255,255,0.35);
+      border: 1px solid rgba(255,255,255,0.45);
       margin: 2px 4px 2px 0;
-      background: linear-gradient(120deg, rgba(255,255,255,0.32), rgba(255,255,255,0.06));
-      box-shadow: 0 0 0 1px rgba(255,255,255,0.08) inset;
+      background: linear-gradient(120deg, rgba(255,255,255,0.22), rgba(255,255,255,0.08));
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.12) inset;
       backdrop-filter: blur(10px);
       -webkit-backdrop-filter: blur(10px);
-      color: #0b1020;
+      color: inherit;
       white-space: nowrap;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
     }
 
     .${CLS.compactName} {
@@ -398,14 +421,15 @@
     }
     .${CLS.manualBox} input {
       padding: 6px 8px;
-      border: 1px solid rgba(255,255,255,0.32);
+      border: 1px solid rgba(255,255,255,0.45);
       border-radius: 999px;
       font-size: 13px;
-      background: rgba(0,0,0,0.25);
+      background: rgba(0,0,0,0.55);
       color: #f5f5ff;
+      box-shadow: inset 0 1px 3px rgba(0,0,0,0.3);
     }
     .${CLS.manualBox} input::placeholder {
-      color: rgba(245,245,255,0.6);
+      color: rgba(245,245,255,0.75);
     }
 
     .${CLS.editBox} {
@@ -420,15 +444,20 @@
         width: 100%;
         min-height: 70px;
         border-radius: 10px;
-        border: 1px solid rgba(255,255,255,0.25);
-        background: rgba(0,0,0,0.3);
+        border: 1px solid rgba(255,255,255,0.45);
+        background: rgba(0,0,0,0.55);
         color: #f5f5ff;
         padding: 8px;
         font-size: 13px;
         resize: vertical;
+        box-shadow: inset 0 1px 3px rgba(0,0,0,0.3);
     }
     .${CLS.editTextarea}[readonly] {
-        opacity: 0.85;
+        opacity: 0.9;
+        background: rgba(0,0,0,0.4);
+    }
+    .${CLS.editTextarea}::placeholder {
+        color: rgba(245,245,255,0.75);
     }
     .${CLS.editControls} {
         display: flex;
@@ -440,12 +469,13 @@
     .${CLS.editResult} {
         min-height: 90px;
         border-radius: 10px;
-        border: 1px dashed rgba(255,255,255,0.2);
+        border: 1px dashed rgba(255,255,255,0.35);
         padding: 10px;
-        background: rgba(0,0,0,0.25);
+        background: rgba(0,0,0,0.45);
         font-size: 13px;
         white-space: pre-wrap;
         line-height: 1.45;
+        color: #f5f5ff;
     }
     .${CLS.editHistoryWrap} {
         display: flex;
@@ -471,10 +501,11 @@
     }
     .${CLS.editHistoryItem} {
         border-radius: 10px;
-        border: 1px solid rgba(255,255,255,0.18);
+        border: 1px solid rgba(255,255,255,0.3);
         padding: 10px;
-        background: linear-gradient(135deg, rgba(20,25,60,0.55), rgba(10,10,20,0.4));
-        box-shadow: 0 12px 24px rgba(0,0,0,0.3);
+        background: linear-gradient(135deg, rgba(15,20,45,0.75), rgba(8,8,18,0.65));
+        box-shadow: 0 12px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.08);
+        color: #f5f5ff;
     }
     .${CLS.editHistoryMeta} {
         font-size: 11px;
@@ -603,13 +634,15 @@
     .${CLS.details} {
       grid-column: 1 / -1;
       margin-top: 6px;
-      padding: 8px;
-      border: 1px dashed rgba(255,255,255,0.24);
+      padding: 10px;
+      border: 1px solid rgba(255,255,255,0.3);
       border-radius: 10px;
-      background: rgba(0,0,0,0.25);
+      background: rgba(0,0,0,0.5);
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
       display: none;
+      color: #f5f5ff;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
     }
 
     /* Timeline */
@@ -674,7 +707,13 @@
 
     /* AO3 / text markers */
 
-    .ao3sn-featured { border: 1px solid #ffd9b3; background: linear-gradient(180deg, #fffaf5, #fff); box-shadow: 0 6px 22px rgba(229,46,113,0.12); }
+    .ao3sn-featured {
+      border: 2px solid currentColor;
+      background: linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0.06));
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.2), 0 6px 22px rgba(0,0,0,0.25);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+    }
 /* paragraph heat wrappers */
 .ao3sn-para {
   position: relative;
@@ -1663,14 +1702,22 @@
         const rect = dot.getBoundingClientRect();
         tip.style.left = (rect.left + rect.width / 2) + 'px';
         tip.style.top = (window.scrollY + rect.top) + 'px';
-        requestAnimationFrame(() => {
-            tip.style.opacity = '1';
-            tip.style.transform = 'translate(-50%, calc(-100% - 8px))';
-        });
+        // Add a small delay before showing to prevent flickering
+        if (dot._tipTimeout) clearTimeout(dot._tipTimeout);
+        dot._tipTimeout = setTimeout(() => {
+            requestAnimationFrame(() => {
+                tip.style.opacity = '1';
+                tip.style.transform = 'translate(-50%, calc(-100% - 8px))';
+            });
+        }, 50);
     }
 
     /** Hides an active tooltip for a dot element. */
     function hideTooltip(dot) {
+        if (dot._tipTimeout) {
+            clearTimeout(dot._tipTimeout);
+            dot._tipTimeout = null;
+        }
         const tip = dot._tip;
         if (!tip) return;
         tip.style.opacity = '0';
@@ -2440,7 +2487,6 @@
                 for (const ev of day.events || []) {
                     const row = document.createElement('div');
                     row.className = CLS.tlEvent;
-                    row.style.cssText = 'border:1px solid #eee;background:#fff;border-radius:8px;padding:6px;display:grid;gap:4px';
                     const tm = document.createElement('div');
                     tm.className = CLS.tlTime;
                     tm.style.cssText = 'font-size:12px;opacity:.8';
@@ -2730,8 +2776,9 @@
 
         const wrapper = document.createElement('span');
         wrapper.className = 'ao3sn-wrap';
-        wrapper.appendChild(dot);
+        // Put the name first, then the dot, so hover works naturally on the name
         wrapper.appendChild(span);
+        wrapper.appendChild(dot);
         if (persist.povName && persist.povName === canon) span.setAttribute('data-main', '1');
         return wrapper;
     }
