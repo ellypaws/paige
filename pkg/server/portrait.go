@@ -155,7 +155,7 @@ func (s *Server) generateAndCachePortrait(req PortraitRequest) ([]byte, error) {
 	}
 
 	prefix := "inkbunny-"
-	if strings.HasPrefix(strings.ToLower(safeID), "inkbunny") {
+	if strings.HasPrefix(strings.ToLower(safeID), "inkbunny") || strings.HasPrefix(strings.ToLower(safeID), "nifty") {
 		prefix = ""
 	}
 	filename := fmt.Sprintf("%s%s-%s.webp", prefix, safeID, safeName)

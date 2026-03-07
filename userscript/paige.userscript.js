@@ -8,6 +8,7 @@
 // @match        https://archiveofourown.org/works/*
 // @match        https://archiveofourown.org/chapters/*
 // @match        https://inkbunny.net/s/*
+// @match        https://www.nifty.org/nifty/*
 // @icon         https://github.com/ellypaws/inkbunny-extension/blob/main/public/favicon.ico?raw=true
 // @run-at       document-idle
 // @grant        GM_addStyle
@@ -855,8 +856,69 @@
         }
     });
 
+    /** Nifty adapter */
+    const NiftyAdapter = /** @type {SiteAdapter} */({
+        id: 'nifty',
+        source: 'nifty',
+        name: 'Nifty Archive',
+        match: () => location.hostname.includes('nifty.org') && (document.contentType === 'text/plain' || !document.querySelector('table')),
+        isFullWork: () => false,
+        parseWorkAndChapterID() {
+            const parts = location.pathname.split('/').filter(Boolean);
+            const lastPart = parts[parts.length - 1];
+            const secondLastPart = parts.length > 1 ? parts[parts.length - 2] : '';
+            if (secondLastPart && lastPart.startsWith(secondLastPart)) {
+                return { id: secondLastPart, chapter: lastPart };
+            }
+            return { id: lastPart, chapter: '' };
+        },
+        collectChapters() {
+            return [];
+        },
+        collectSingleText() {
+            const clone = document.body.cloneNode(true);
+            const text = (clone.innerText || '').replace(/\u00a0/g, ' ').trim();
+            return text;
+        },
+        findWrapTargets() {
+            if (document.contentType === 'text/plain') {
+                const pre = document.querySelector('pre');
+                if (pre && !pre.dataset.paigeFormatted) {
+                    pre.dataset.paigeFormatted = 'true';
+                    pre.style.display = 'none';
+                    const container = document.createElement('div');
+                    container.className = 'nifty-formatted-story';
+                    container.style.maxWidth = '800px';
+                    container.style.margin = '20px auto';
+                    container.style.padding = '0 20px';
+                    container.style.fontFamily = 'serif';
+                    container.style.fontSize = '1.1rem';
+                    container.style.lineHeight = '1.6';
+                    container.style.color = '#ccc';
+                    document.body.style.backgroundColor = '#121212';
+
+                    const text = pre.innerText || '';
+                    text.split(/\n{2,}/).forEach(pText => {
+                        const trimmed = pText.trim();
+                        if (!trimmed) return;
+                        const p = document.createElement('p');
+                        p.textContent = trimmed;
+                        p.style.marginBottom = '1em';
+                        container.appendChild(p);
+                    });
+
+                    document.body.insertBefore(container, pre);
+                    return [container];
+                } else if (pre && pre.dataset.paigeFormatted) {
+                    return [document.querySelector('.nifty-formatted-story')];
+                }
+            }
+            return [document.body];
+        }
+    });
+
     /** Choose active adapter (or bail if neither site). */
-    const ADAPTERS = [AO3Adapter, InkbunnyAdapter];
+    const ADAPTERS = [AO3Adapter, InkbunnyAdapter, NiftyAdapter];
     const adapter = ADAPTERS.find(a => a.match());
     if (!adapter) return; // Not a supported site/page
 

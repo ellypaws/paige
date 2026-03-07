@@ -58,10 +58,11 @@ func (s *Server) handlePostSummarize(c echo.Context) error {
 	hasCharacters := len(summary.Characters) > 0
 	isAO3 := req.Source == "ao3" && summary.Chapters[req.Chapter]
 	isInkbunny := req.Source == "inkbunny"
+	isNifty := req.Source == "nifty"
 	hasHeat := len(summary.Heat) > 0
 	cacheControl := c.Request().Header.Get("Cache-Control") != "no-cache"
 
-	if cacheControl && hasCharacters && hasHeat && (isAO3 || isInkbunny) {
+	if cacheControl && hasCharacters && hasHeat && (isAO3 || isInkbunny || isNifty) {
 		log.Info("loaded existing summary data", "id", req.ID, "characters", len(summary.Characters), "timeline", len(summary.Timeline), "chapters", len(summary.Chapters))
 		return w.Event("done", summary)
 	}
